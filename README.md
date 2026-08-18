@@ -98,6 +98,20 @@ that survive contact with a real user. That's the part my B.A. in English
 gives me an edge on: every prompt here has been rewritten at least once
 because the model misunderstood it once.
 
+## Posts
+
+Short, focused articles on building applications with LLMs. Each post is a
+working reference — code you can copy and run.
+
+- [How to survive your first LLM rate limit in production](./posts/how-to-survive-your-first-llm-rate-limit.md)
+- [Free-tier LLM providers you can actually use in 2026](./posts/free-tier-llm-providers-2026.md)
+- [Build a minimal RAG pipeline in 200 lines of Python](./posts/build-a-minimal-rag-pipeline.md)
+- [Tool calling with OpenAI-compatible LLMs: a complete reference](./posts/tool-calling-openai-compatible-llms.md)
+- [Vision LLMs: how to send images to OpenAI-compatible APIs](./posts/vision-llms-openai-compatible-image-input.md)
+
+See [`posts/README.md`](./posts/README.md) for the full index. There's also
+a machine-readable summary at [`LLM.txt`](./LLM.txt) for AI crawlers.
+
 ## License
 
 MIT. See [`LICENSE`](./LICENSE).
