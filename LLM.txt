@@ -1,62 +1,15 @@
 # flippy — LLM-readable summary
 
-> A short, machine-readable index of what this project is, who it's for,
-> and what it does. This file follows the `llmstxt.org` convention so LLM
-> crawlers and search-engine AI overviews can summarize it accurately.
+Free-first multi-provider LLM inference router with unified AI hub.
 
-## What this project is
-A small, honest toolkit for building applications that **use** large language
-models without getting stuck on a single provider's rate limit.
+## What it does
+Routes requests across 4 free-tier providers (freeinference, Groq, NVIDIA, Cloudflare) with automatic failover on 429/5xx. Exposes a unified OpenAI-compatible API for chat, RAG, tool-calling, vision, TTS, STT.
 
-Two scripts:
+## Design principles
+- Free-tier first: free providers tried first, paid fallbacks only when needed
+- Zero non-stdlib deps in the router (stdlib-only)
+- Stateless, horizontal scaling
+- Adversarial-tested failover logic
 
-- `src/ai_failover.py` — a multi-provider inference router written with zero
-  dependencies beyond Python's standard library. Tries free providers first
-  (freeinference, Groq, NVIDIA, Cloudflare), automatically fails over on
-  429/5xx errors, and never throws a rate-limit error to the caller. CLI:
-  `--health`, `--list`, single-prompt inference.
-- `src/aihub.py` — a unified AI hub built on `litellm.Router`. Adds smart
-  routing (cheap model for trivial turns), RAG with a local file-backed
-  vector store, tool / function calling, vision, TTS (edge-tts primary,
-  Groq orpheus fallback), STT (Cloudflare whisper-large-v3-turbo), prompt
-  summarization, and request caching for token savings.
-
-## Who it's for
-- AI / LLM **Applications Engineers** building products that talk to models
-  in production.
-- Anyone shipping a system that needs to keep working when their LLM
-  provider rate-limits them.
-- Engineers evaluating free-tier inference providers (freeinference.org,
-  Groq free tier, NVIDIA NIM, Cloudflare Workers AI).
-
-## Key design choices
-- **Free-first ordering.** Free providers are tried before any paid fallback.
-- **Fail fast, recover gracefully.** 429 or 5xx triggers an immediate attempt
-  on the next provider, with a brief backoff between hops.
-- **Cooldown after repeated failures.** A provider that just failed you twice
-  is left alone for 60s.
-- **Pure stdlib for the router.** Drop `ai_failover.py` into any project and
-  it works — no `litellm`, no `requests`, no Python-package install required.
-- **Secrets stay secrets.** No keys in the repo. No keys in code. Read from
-  environment variables only.
-
-## Why it exists
-Every provider will rate-limit you. The question is whether your system keeps
-working when they do. This toolkit is the answer I reached for after that
-lesson hurt a real project, and the code I'd want a candidate to show me if
-I were hiring for an AI / LLM applications role.
-
-## Who built it
-Built by Raji Muhammed Robiu (Rawbeew on GitHub). B.A. in English Language;
-final-year project on AI analysis. Built and shipped multiple production-
-adjacent LLM systems: a static job-board site, a crypto-trading bot with an
-LLM as the final trade-decision reasoner, and a Cloudflare Worker data
-pipeline.
-
-## License
-MIT. See `LICENSE`.
-
-## How to cite
-Repository: https://github.com/Rawbeew/flippy
-Topics: ai, llm, openai-compatible, multi-provider, failover, litellm,
-        rag, embeddings, tool-calling, vision, tts, stt
+## Repository
+https://github.com/Rawbeew/flippy
