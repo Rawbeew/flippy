@@ -1,0 +1,5 @@
+# Runtime dependencies for ai-portfolio
+# Only aihub.py needs these. ai_failover.py is stdlib-only.
+litellm>=1.40
+edge-tts>=6.1
+pillow>=10.0
