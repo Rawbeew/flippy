@@ -10,8 +10,15 @@ import urllib.request
 from .core import UA
 
 
-def stream_chat(prov, messages, model=None, max_tokens=300, timeout=120):
-    """Stream a completion. Returns dict with ttft, total latency, text, tokens."""
+def stream_chat(prov, messages, model=None, max_tokens=2000, timeout=120):
+    """Stream a completion. Returns dict with ttft, total latency, text, tokens.
+
+    Note: reasoning models (e.g. groq openai/gpt-oss-*) stream `reasoning` deltas
+    before `content`; a too-small max_tokens gets consumed by reasoning and yields
+    no visible content. Default raised to 2000 to stay safe.
+    """
+    if prov.get("single"):
+        return {"ok": False, "error": "provider does not support streaming", "latency": 0.0}
     h = {"Authorization": f"Bearer {prov['key']}", "Content-Type": "application/json",
          "User-Agent": UA, "Accept": "text/event-stream"}
     body = {"model": model or prov["models"][0], "messages": messages,
@@ -32,13 +39,14 @@ def stream_chat(prov, messages, model=None, max_tokens=300, timeout=120):
                     break
                 try:
                     d = json.loads(payload)
-                    delta = d["choices"][0].get("delta", {}).get("content", "")
+                    delta = d["choices"][0].get("delta", {})
+                    content = delta.get("content") or ""
                 except Exception:
                     continue
-                if delta:
+                if content:
                     if ttft is None:
-                        ttft = time.time() - t0
-                    chunks.append(delta)
+                        ttft = time.time() - t0  # first *visible* token
+                    chunks.append(content)
     except Exception as e:
         return {"ok": False, "error": str(e), "latency": time.time() - t0}
 

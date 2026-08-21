@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))  # the loomweaver package dir itself
 JOBS_FILE = os.path.join(HERE, "cron_jobs.json")
 STATE_FILE = os.path.join(HERE, "cron_state.json")
 
@@ -57,8 +57,8 @@ def run_job(name):
     if not job:
         return {"ok": False, "error": f"job '{name}' not found"}
     t0 = time.time()
-    r = subprocess.run([sys.executable, "-m", "loomweaver", *job["cmd"]],
-                       capture_output=True, text=True, cwd=HERE, timeout=1800)
+    r = subprocess.run([sys.executable, "-m", "src.loomweaver", *job["cmd"]],
+                       capture_output=True, text=True, timeout=1800)
     out = (r.stdout + r.stderr).strip()
     # persist last result summary into state
     state = _state()

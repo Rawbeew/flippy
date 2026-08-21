@@ -104,26 +104,32 @@ def chat(prov, messages, model=None, max_tokens=1024, timeout=120):
 
 
 def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
-    """Failover across all providers; returns first ok result + which provider won."""
+    """Failover across all providers; returns first ok result + which provider won.
+
+    Model pinning:
+      - 'provider/model' → only that provider is tried, with 'model' stripped of the prefix
+      - bare model name  → only providers whose models list contains it are tried
+      - None             → each provider's default model
+    """
     last = None
     for prov in build_providers(creds or load_creds()):
-        m = model if (model and not model.startswith(prov["name"] + "/")) else None
-        # allow 'provider/model' syntax
-        if model and "/" in model and model.split("/")[0] == prov["name"]:
-            m = model.split("/", 1)[1]
-        elif model and any(model == x for x in prov["models"]):
-            m = model
+        m = None
+        if model:
+            if any(model == x for x in prov["models"]):
+                m = model  # exact model ID match (even with slashes, e.g. openai/gpt-oss-20b)
+            elif "/" in model and model.split("/", 1)[0] == prov["name"]:
+                m = model.split("/", 1)[1]  # provider-pinned: strip the prefix
+            else:
+                continue  # pinned to a different provider/model — skip this one
         r = chat(prov, messages, model=m, max_tokens=max_tokens)
         if on_event:
             on_event({"type": "llm_call", "provider": prov["name"], "model": m,
                       "ok": r.get("ok"), "latency": round(r.get("latency", 0), 3)})
         if r.get("ok"):
             r["provider"] = prov["name"]
-            r["model"] = m or (prov["models"][0] if not prov.get("single") else "")
+            r["model"] = m or ""
             return r
         last = r
-        if not r.get("retryable"):
-            break  # auth error etc — next provider likely same key class? no: try next anyway
     return {"ok": False, "error": (last or {}).get("error", "all providers failed")}
 
 

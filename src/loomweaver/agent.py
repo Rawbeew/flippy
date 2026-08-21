@@ -32,6 +32,9 @@ def _parse_json_action(text):
     return None
 
 
+MAX_SESSION_MESSAGES = 40  # keep context bounded; oldest non-system messages dropped
+
+
 def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=None, verbose=True):
     runlog = RunLog(runs_dir)
     store = SessionStore()
@@ -90,6 +93,12 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
     else:
         final = "max steps reached"
         runlog.emit({"type": "run_done", "step": max_steps, "summary": final})
+
+    # trim session so repeated runs don't grow context unboundedly (keep system + recent)
+    if len(sess["messages"]) > MAX_SESSION_MESSAGES:
+        sys_msgs = [m for m in sess["messages"][:1] if m["role"] == "system"]
+        rest = sess["messages"][1:]
+        sess["messages"] = sys_msgs + rest[-(MAX_SESSION_MESSAGES - len(sys_msgs)):]
 
     store.save(sess)
     return {"result": final, "session": sess["id"], "run_dir": runlog.dir,
