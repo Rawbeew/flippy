@@ -1,0 +1,73 @@
+{
+  "date": "2026-08-21",
+  "requests_per_provider": 20,
+  "prompt": "Reply with the single word: ok",
+  "max_tokens": 8,
+  "note": "Keys are sourced from env; no secrets appear anywhere in this file.",
+  "results": [
+    {
+      "provider": "openrouter",
+      "model": "stealth/ox-alpha",
+      "requests": 20,
+      "successes": 20,
+      "success_rate": 100.0,
+      "latency_p50_s": 1.058,
+      "latency_p95_s": 1.251,
+      "latency_mean_s": 1.329,
+      "tokens_per_sec_mean": 7.25,
+      "errors": {}
+    },
+    {
+      "provider": "cloudflare",
+      "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "requests": 20,
+      "successes": 0,
+      "success_rate": 0.0,
+      "latency_p50_s": 0.068,
+      "latency_p95_s": 0.114,
+      "latency_mean_s": 0.073,
+      "tokens_per_sec_mean": null,
+      "errors": {
+        "HTTP 401": 20
+      }
+    },
+    {
+      "provider": "freeinference",
+      "model": "minimax-m3",
+      "requests": 20,
+      "successes": 20,
+      "success_rate": 100.0,
+      "latency_p50_s": 1.166,
+      "latency_p95_s": 2.817,
+      "latency_mean_s": 1.628,
+      "tokens_per_sec_mean": 7.18,
+      "errors": {}
+    },
+    {
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "requests": 20,
+      "successes": 20,
+      "success_rate": 100.0,
+      "latency_p50_s": 0.221,
+      "latency_p95_s": 0.397,
+      "latency_mean_s": 0.254,
+      "tokens_per_sec_mean": 35.37,
+      "errors": {}
+    },
+    {
+      "provider": "nvidia",
+      "model": "nvidia/llama-3.3-nemotron-super-49b-v1",
+      "requests": 20,
+      "successes": 0,
+      "success_rate": 0.0,
+      "latency_p50_s": 0.136,
+      "latency_p95_s": 0.143,
+      "latency_mean_s": 0.137,
+      "tokens_per_sec_mean": null,
+      "errors": {
+        "HTTP 403": 20
+      }
+    }
+  ]
+}
