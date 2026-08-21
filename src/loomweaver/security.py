@@ -99,6 +99,8 @@ def check_path(path):
     scratch = os.environ.get("LOOMWEAVER_SCRATCH")
     if scratch:
         allowed_roots.append(os.path.realpath(scratch))
+    if foreign_windows and os.sep != "\\":
+        return False, "foreign absolute path denied"
     contained = any(p == r or p.startswith(r + os.sep) for r in allowed_roots)
     if not contained:
         return False, ("foreign absolute path denied" if foreign_windows
