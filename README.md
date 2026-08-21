@@ -1,43 +1,119 @@
-# flippy
+# flippy 🐟
 
-Free-first multi-provider LLM inference router with unified AI hub — now with **Loomweaver**, the complete harness: agent runner, eval suites, and inference load-testing.
+**Free-first multi-provider LLM inference, with a complete agent harness built in.**
 
-## What it does
-- Routes requests across 5 free-tier providers (OpenRouter, freeinference, Groq, NVIDIA, Cloudflare)
-- Automatic failover on 429/5xx with exponential backoff
-- Unified OpenAI-compatible API for chat, RAG, tools, vision, TTS, STT
-- **Loomweaver subpackage**: autonomous agent loop, eval suites (basic/reasoning/extraction/tools), concurrency load-testing with TTFT streaming metrics, local cron scheduler
-- Zero non-stdlib dependencies in the router; Loomweaver is stdlib-only too
-- Built for production reliability
+One stdlib-only Python package that routes your prompts across five free LLM providers,
+never stops on a rate limit, and ships with **Loomweaver** — an autonomous agent runner,
+eval suites, and inference load-testing.
+
+[![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Deps](https://img.shields.io/badge/router%20deps-stdlib%20only-blue)
+
+---
+
+## Why flippy
+
+Every free LLM provider rate-limits. Most apps die the day one does.
+flippy flips between them automatically:
+
+```
+your prompt ──▶ Router ──▶ ① OpenRouter ──fail──▶ ② freeinference ──fail──▶ ③ Groq ──▶ ✅ response
+                            (stealth/ox-alpha)     (minimax-m3 …)          (gpt-oss-*)
+```
+
+- **Free-first ordering** — paid capacity is never touched before free tiers
+- **Failover on 429/5xx** — transient errors move to the next provider mid-request
+- **Provider pinning** — `groq/openai/gpt-oss-20b` forces a provider; bare model IDs match any provider that has them
+- **Zero dependencies** — the router and Loomweaver are pure Python stdlib
+
+## The two layers
+
+| Layer | Module | What it gives you |
+|---|---|---|
+| **Router** | `src/ai_failover.py` | One-shot chat with automatic failover + Prometheus-style latency metrics |
+| **AI Hub** | `src/aihub.py` | litellm-powered: chat, vision, function calling, embeddings/RAG, TTS, STT *(needs `pip install litellm edge-tts`)* |
+| **Loomweaver** | `src/loomweaver/` | Agent loop, eval suites, load testing, cron |
 
 ## Quickstart
+
 ```bash
+git clone https://github.com/Rawbeew/flippy && cd flippy
+export OPENROUTER_KEY=...      # any ONE of these is enough to start
 export FREEINFERENCE_KEY=...
 export GROQ_KEY=...
-export NVIDIA_KEY=...
-python src/ai_failover.py "your prompt"
+
+# one-shot chat with failover
+python src/ai_failover.py "explain KV caches in one paragraph"
 ```
 
-## Loomweaver quickstart
+### Loomweaver — the harness
+
 ```bash
-python -m src.loomweaver providers          # list configured providers
-python -m src.loomweaver agent "check disk space with the shell tool"  # run the agent
-python -m src.loomweaver eval --suite basic     # eval suite
-python -m src.loomweaver loadtest --provider groq  # load-test
-python -m src.loomweaver ttft               # streaming TTFT sweep
-python -m src.loomweaver cron --list        # scheduled jobs
+python -m src.loomweaver providers                    # see what you're routed across
+python -m src.loomweaver agent "check disk space"     # autonomous goal → tools → done
+python -m src.loomweaver eval --suite basic           # score a model
+python -m src.loomweaver eval --suite tools           # tool-selection accuracy
+python -m src.loomweaver loadtest --provider groq     # concurrency + latency profile
+python -m src.loomweaver ttft                         # time-to-first-token sweep
+python -m src.loomweaver cron --daemon                # scheduled evals/loadtests
 ```
 
-## Architecture
-```
-Request → Router → [openrouter | freeinference | Groq | NVIDIA | Cloudflare] → Response
-                ↓
-          First success returns
-          Failed providers cooled down
+### AI Hub — multimodal *(optional deps)*
 
-Loomweaver: goal → plan → act(tools) → observe → done
-            every step logged to runs/<ts>/events.jsonl
+```bash
+pip install litellm edge-tts
+python src/aihub.py --chat "hello"
+python src/aihub.py --vision photo.jpg "what's in this?"
+python src/aihub.py --rag add "notes.txt" && python src/aihub.py --rag-chat "summarize my notes"
 ```
+
+## Loomweaver in depth
+
+The agent loop: **goal → plan → act (tools) → observe → done**, with every step
+appended to a replayable JSONL event log (`runs/<timestamp>/events.jsonl`).
+
+Built-in tools: `shell`, `http_get`, `read_file`, `write_file`, `list_dir`, `remember`.
+Add your own in three lines:
+
+```python
+from loomweaver.tools import tool
+
+@tool("get_price", "Fetch BTC price", {"symbol": "str"})
+def get_price(symbol):
+    ...
+```
+
+Eval suites: `basic` · `reasoning` · `extraction` · `tools` — each case scored by
+substring, exact-JSON, or regex match, with per-case latency and provider attribution.
+
+Load tests report p50/max latency, requests/sec, tokens/sec, and success rate
+under configurable concurrency. The TTFT sweep streams from every provider and
+ranks them by first-token latency.
+
+## Credentials
+
+flippy reads keys from the environment (`~/.bashrc`, `.env`, whatever you use):
+
+| Env var | Provider | Notes |
+|---|---|---|
+| `OPENROUTER_KEY` | OpenRouter | primary slot |
+| `FREEINFERENCE_KEY` | freeinference.org | free tier |
+| `GROQ_KEY` | Groq | fastest streaming |
+| `NVIDIA_KEY` | NVIDIA NIM | 100+ models |
+| `CLOUDFLARE_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Workers AI | no streaming |
+
+Set just one and everything works; set all five for maximum resilience.
+
+## Testing
+
+```bash
+pip install pytest
+python -m pytest tests/ -q      # 15 unit tests, fully mocked — no network
+```
+
+CI runs tests on Python 3.11–3.13 plus compile checks and a credential-free CLI smoke test.
 
 ## License
+
 MIT

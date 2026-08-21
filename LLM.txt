@@ -1,15 +1,26 @@
-# flippy — LLM-readable summary
+# flippy — LLM.txt
 
-Free-first multi-provider LLM inference router with unified AI hub.
+flippy is a free-first multi-provider LLM inference router with an integrated
+agent harness (Loomweaver). Pure Python stdlib; optional litellm for multimodal.
 
-## What it does
-Routes requests across 4 free-tier providers (freeinference, Groq, NVIDIA, Cloudflare) with automatic failover on 429/5xx. Exposes a unified OpenAI-compatible API for chat, RAG, tool-calling, vision, TTS, STT.
+## Capabilities
+- Automatic failover across OpenRouter, freeinference.org, Groq, NVIDIA NIM, Cloudflare Workers AI
+- Provider pinning via `provider/model` syntax; exact model-ID matching
+- Autonomous agent loop with tool registry (shell, http, filesystem, memory)
+- Eval suites: basic, reasoning, extraction, tool-selection accuracy
+- Inference load testing: concurrency, p50/max latency, tokens/sec, streaming TTFT
+- Local cron scheduler for recurring evals and load tests
+- JSONL event logging for every run (replayable)
 
-## Design principles
-- Free-tier first: free providers tried first, paid fallbacks only when needed
-- Zero non-stdlib deps in the router (stdlib-only)
-- Stateless, horizontal scaling
-- Adversarial-tested failover logic
+## Key commands
+- `python src/ai_failover.py "prompt"` — one-shot chat with failover
+- `python -m src.loomweaver providers` — list providers
+- `python -m src.loomweaver agent "<goal>"` — run the agent
+- `python -m src.loomweaver eval --suite <name>` — run evals
+- `python -m src.loomweaver loadtest --provider <name>` — load test
+- `python -m src.loomweaver ttft` — streaming latency sweep
 
-## Repository
-https://github.com/Rawbeew/flippy
+## Links
+- Repo: https://github.com/Rawbeew/flippy
+- License: MIT
+- Related: https://github.com/Rawbeew (author)

@@ -1,39 +1,45 @@
-# Quickstart — ai-portfolio
+# Quickstart
 
-## Install
+Get flippy running in 60 seconds.
+
+## 1. Clone + set one key
+
 ```bash
-git clone https://github.com/Rawbeew/ai-portfolio.git
-cd ai-portfolio
-pip install litellm edge-tts pillow
+git clone https://github.com/Rawbeew/flippy && cd flippy
+export GROQ_KEY=gsk_...   # or OPENROUTER_KEY / FREEINFERENCE_KEY / NVIDIA_KEY
 ```
 
-## Set credentials (free tiers)
+## 2. Chat with failover
+
 ```bash
-export FREEINFERENCE_KEY=...        # https://freeinference.org (free)
-# optional:
-export GROQ_KEY=...                  # https://console.groq.com (free tier)
-export NVIDIA_KEY=...                # https://build.nvidia.com (free tier)
-export CLOUDFLARE_TOKEN=...          # + CLOUDFLARE_ACCOUNT_ID for STT/vision
-export CLOUDFLARE_ACCOUNT_ID=...
+python src/ai_failover.py "why is speculative decoding faster?"
 ```
 
-## First commands
+If your first provider rate-limits, flippy flips to the next one automatically.
+
+## 3. Run the agent
+
 ```bash
-python src/ai_failover.py --health          # confirm providers are alive
-python src/ai_failover.py "Hello there"     # basic chat with auto-failover
-python src/aihub.py --health                # see the unified hub's providers
-python src/aihub.py --chat "Quick test"     # routed through litellm Router
-python src/aihub.py --tooltest              # function-calling demo
+python -m src.loomweaver agent "use the shell tool to check free disk space, then report DONE"
 ```
 
-That's it. See `examples/README.md` for the full menu.
+## 4. Score a model
 
-## What this is (and isn't)
-This is **portable, secret-free, public-portfolio** code. The real, hardened
-versions live in private projects on this machine and have been running in
-production-like workflows for the `jummai-job-finder` static site, the
-`archimeda` crypto-trading bot, and a Cloudflare Worker that fetches fresh
-Ontario job postings every 2 hours.
+```bash
+python -m src.loomweaver eval --suite basic      # 5 quick checks
+python -m src.loomweaver eval --suite tools      # tool-selection accuracy
+```
 
-If you're hiring for an **AI / LLM Applications Engineer** role and want to
-see this in a real product context, see the private work — get in touch.
+## 5. Find your fastest provider
+
+```bash
+python -m src.loomweaver ttft
+```
+
+## Optional: multimodal hub
+
+```bash
+pip install litellm edge-tts
+python src/aihub.py --chat "hello"
+python src/aihub.py --vision photo.jpg "describe this"
+```
