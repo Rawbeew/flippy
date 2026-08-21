@@ -8,3 +8,4 @@ venv/
 .aihub_vectors.json
 tts.mp3
 runs/
+sessions/
