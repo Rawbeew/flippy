@@ -31,28 +31,23 @@ import os, sys, json, time, argparse, base64, hashlib, math
 
 # ---------- Provider registry ----------
 def build_router_models():
-    """Return list of (lit_name, friendly, api_key, api_base) tuples."""
+    """Derived from the canonical registry in providers.py."""
+    from flippy_providers import get_providers
     out = []
-    if os.environ.get("FREEINFERENCE_KEY"):
-        k = os.environ["FREEINFERENCE_KEY"]
-        base = "https://freeinference.org/v1"
-        for m in ["minimax-m3", "qwen3.6-35b", "deepseek-v4-flash", "glm-5.1"]:
-            out.append((f"openai/{m}", m, k, base))
-    if os.environ.get("GROQ_KEY"):
-        k = os.environ["GROQ_KEY"]
-        for m in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
-            out.append((f"groq/{m}", m, k, None))
-    if os.environ.get("NVIDIA_KEY"):
-        k = os.environ["NVIDIA_KEY"]
-        base = "https://integrate.api.nvidia.com/v1"
-        for m in ["nvidia/llama-3.3-nemotron-super-49b-v1"]:
-            out.append((f"openai/{m}", m, k, base))
-    if os.environ.get("CLOUDFLARE_TOKEN") and os.environ.get("CLOUDFLARE_ACCOUNT_ID"):
-        k = os.environ["CLOUDFLARE_TOKEN"]
-        cf_base = (f"https://api.cloudflare.com/client/v4/accounts/"
-                   f"{os.environ['CLOUDFLARE_ACCOUNT_ID']}/ai")
-        out.append(("openai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-                    "@cf/meta/llama-3.3-70b-instruct-fp8-fast", k, cf_base))
+    for p in get_providers():
+        if p["name"] == "cloudflare":
+            # litellm shape for CF differs; keep legacy tuple
+            acc = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+            cf_base = f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai"
+            for m in p["models"]:
+                out.append((f"openai/{m}", m, p["key"], cf_base))
+        elif p["name"] == "groq":
+            for m in p["models"]:
+                out.append((f"groq/{m}", m, p["key"], None))
+        else:
+            base = p.get("litellm_base")
+            for m in p["models"]:
+                out.append((f"openai/{m}", m, p["key"], base))
     return out
 
 

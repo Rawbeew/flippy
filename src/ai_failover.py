@@ -25,56 +25,19 @@ License: MIT
 import os, sys, json, time, argparse, urllib.request, urllib.error
 
 
-# ---------- Provider registry ----------
-# Add new OpenAI-compatible providers here. `single=True` means the model is in
-# the URL (not the body) — e.g. Cloudflare Workers AI.
+# ---------- Provider registry (delegates to canonical providers.py) ----------
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from flippy_providers import get_providers  # canonical registry
+
+
 def build_providers():
-    P = []
-    if os.environ.get("FREEINFERENCE_KEY"):
-        P.append({
-            "name": "freeinference",
-            "url": "https://freeinference.org/v1/chat/completions",
-            "key": os.environ["FREEINFERENCE_KEY"],
-            "models": ["minimax-m3", "qwen3.6-35b", "deepseek-v4-flash", "glm-5.1"],
-            "cost": "free",
-        })
-    if os.environ.get("GROQ_KEY"):
-        P.append({
-            "name": "groq",
-            "url": "https://api.groq.com/openai/v1/chat/completions",
-            "key": os.environ["GROQ_KEY"],
-            "models": ["openai/gpt-oss-20b", "openai/gpt-oss-120b"],
-            "cost": "free",
-        })
-    if os.environ.get("NVIDIA_KEY"):
-        P.append({
-            "name": "nvidia",
-            "url": "https://integrate.api.nvidia.com/v1/chat/completions",
-            "key": os.environ["NVIDIA_KEY"],
-            "models": ["nvidia/llama-3.3-nemotron-super-49b-v1"],
-            "cost": "free",
-        })
-    if os.environ.get("CLOUDFLARE_TOKEN") and os.environ.get("CLOUDFLARE_ACCOUNT_ID"):
-        acc = os.environ["CLOUDFLARE_ACCOUNT_ID"]
-        P.append({
-            "name": "cloudflare",
-            "url": (f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai/run/"
-                    "@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
-            "key": os.environ["CLOUDFLARE_TOKEN"],
-            "models": ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"],
-            "cost": "free",
-            "single": True,  # model in URL
-        })
-    # Paid fallback (kept commented to keep the default FREE-only stack).
-    # if os.environ.get("HYPERBOLIC_KEY"):
-    #     P.append({
-    #         "name": "hyperbolic",
-    #         "url": "https://api.hyperbolic.xyz/v1/chat/completions",
-    #         "key": os.environ["HYPERBOLIC_KEY"],
-    #         "models": ["deepseek-ai/DeepSeek-V3", "meta-llama/Llama-3.3-70B-Instruct"],
-    #         "cost": "paid",
-    #     })
-    return P
+    """Backwards-compatible wrapper — the canonical list lives in providers.py."""
+    return [
+        {k: v for k, v in p.items() if k in ("name", "url", "key", "models",
+                                              "cost", "primary", "single")}
+        for p in get_providers()
+    ]
 
 
 def post(url, headers, body, timeout=60):

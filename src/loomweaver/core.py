@@ -26,36 +26,27 @@ def load_creds(path=CREDS_PATH):
 
 # ---------------------------------------------------------------- providers
 
-def build_providers(creds):
-    """Return list of OpenAI-compatible providers, free-first."""
-    P = []
-    if creds.get("OPENROUTER_KEY"):
-        P.append({"name": "openrouter", "cost": "free", "primary": True,
-                  "url": "https://openrouter.ai/api/v1/chat/completions",
-                  "key": creds["OPENROUTER_KEY"],
-                  "models": ["stealth/ox-alpha"]})
-    if creds.get("FREEINFERENCE_KEY"):
-        P.append({"name": "freeinference", "cost": "free",
-                  "url": "https://freeinference.org/v1/chat/completions",
-                  "key": creds["FREEINFERENCE_KEY"],
-                  "models": ["minimax-m3", "qwen3.6-35b", "deepseek-v4-flash"]})
-    if creds.get("CLOUDFLARE_TOKEN") and creds.get("CLOUDFLARE_ACCOUNT_ID"):
-        acc = creds["CLOUDFLARE_ACCOUNT_ID"]
-        P.append({"name": "cloudflare", "cost": "free", "single": True,
-                  "url": f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-                  "key": creds["CLOUDFLARE_TOKEN"],
-                  "models": ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"]})
-    if creds.get("NVIDIA_KEY"):
-        P.append({"name": "nvidia", "cost": "free",
-                  "url": "https://integrate.api.nvidia.com/v1/chat/completions",
-                  "key": creds["NVIDIA_KEY"],
-                  "models": ["nvidia/llama-3.3-nemotron-super-49b-v1"]})
-    if creds.get("GROQ_KEY"):
-        P.append({"name": "groq", "cost": "free",
-                  "url": "https://api.groq.com/openai/v1/chat/completions",
-                  "key": creds["GROQ_KEY"],
-                  "models": ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]})
-    return sorted(P, key=lambda p: (0 if p.get("primary") else 1, p["name"]))
+def build_providers(creds=None):
+    """Canonical list comes from providers.py; creds dict (from a credentials
+    file) is mapped onto env-var names for compatibility."""
+    try:
+        import flippy_providers as _reg
+    except ImportError:  # running as a package: add src/ to path and retry
+        import sys as _sys
+        _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        import flippy_providers as _reg
+    if creds:
+        env = {
+            "OPENROUTER_KEY": creds.get("OPENROUTER_KEY"),
+            "FREEINFERENCE_KEY": creds.get("FREEINFERENCE_KEY"),
+            "CLOUDFLARE_TOKEN": creds.get("CLOUDFLARE_TOKEN"),
+            "CLOUDFLARE_ACCOUNT_ID": creds.get("CLOUDFLARE_ACCOUNT_ID"),
+            "NVIDIA_KEY": creds.get("NVIDIA_KEY"),
+            "GROQ_KEY": creds.get("GROQ_KEY"),
+        }
+        env = {k: v for k, v in env.items() if v}
+        return _reg.get_providers(env)
+    return _reg.get_providers()
 
 
 def is_retryable(status, body):
