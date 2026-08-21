@@ -1,0 +1,11 @@
+{"t": 1787332277.998, "type": "llm_call", "provider": "openrouter", "model": null, "ok": true, "latency": 1.877}
+{"t": 1787332277.999, "type": "eval_case", "id": "math1", "pass": true, "latency": 1.88, "provider": "openrouter", "answer": "391"}
+{"t": 1787332279.961, "type": "llm_call", "provider": "openrouter", "model": null, "ok": true, "latency": 1.96}
+{"t": 1787332279.962, "type": "eval_case", "id": "cap1", "pass": true, "latency": 1.96, "provider": "openrouter", "answer": "Canberra"}
+{"t": 1787332282.418, "type": "llm_call", "provider": "openrouter", "model": null, "ok": true, "latency": 2.456}
+{"t": 1787332282.421, "type": "eval_case", "id": "json1", "pass": true, "latency": 2.46, "provider": "openrouter", "answer": "{\"ok\": true, \"n\": 3}"}
+{"t": 1787332284.805, "type": "llm_call", "provider": "openrouter", "model": null, "ok": true, "latency": 2.383}
+{"t": 1787332284.805, "type": "eval_case", "id": "count1", "pass": true, "latency": 2.38, "provider": "openrouter", "answer": "7"}
+{"t": 1787332287.129, "type": "llm_call", "provider": "openrouter", "model": null, "ok": true, "latency": 2.322}
+{"t": 1787332287.13, "type": "eval_case", "id": "reverse1", "pass": false, "latency": 2.32, "provider": "openrouter", "answer": "ssenrah"}
+{"t": 1787332287.13, "type": "eval_summary", "suite": "basic", "model": null, "passed": 4, "total": 5, "score": 80, "avg_latency": 2.2}

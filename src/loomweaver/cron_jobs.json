@@ -1,0 +1,33 @@
+[
+  {
+    "name": "nightly-eval",
+    "interval_minutes": 1440,
+    "cmd": [
+      "eval",
+      "--suite",
+      "basic"
+    ]
+  },
+  {
+    "name": "reasoning-eval",
+    "interval_minutes": 1440,
+    "cmd": [
+      "eval",
+      "--suite",
+      "reasoning"
+    ]
+  },
+  {
+    "name": "groq-loadtest",
+    "interval_minutes": 720,
+    "cmd": [
+      "loadtest",
+      "--provider",
+      "groq",
+      "--concurrency",
+      "4",
+      "--requests",
+      "6"
+    ]
+  }
+]
