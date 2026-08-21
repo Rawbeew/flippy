@@ -135,6 +135,28 @@ python -m pytest tests/ -q      # 15 unit tests, fully mocked — no network
 
 CI runs tests on Python 3.11–3.13 plus compile checks and a credential-free CLI smoke test.
 
+## Measured numbers
+
+From `benchmarks/RESULTS.md` (2026-08-21, 20 requests/provider, real keys):
+
+| Provider | Model | Success | p50 latency | p95 latency | Tokens/s |
+|---|---|---|---|---|---|
+| groq | `openai/gpt-oss-20b` | 100% | 0.221 s | 0.397 s | 35.4 |
+| openrouter | `stealth/ox-alpha` | 100% | 1.058 s | 1.251 s | 7.3 |
+| freeinference | `minimax-m3` | 100% | 1.166 s | 2.817 s | 7.2 |
+| cloudflare / nvidia | — | 0% (401 / 403 — stale tokens) | — | — | — |
+
+The two dead providers are the point: the router skipped both and every request still landed on a healthy provider within the same call. Re-run yourself with `python benchmarks/run_bench.py`.
+
+## What I would improve next
+
+Honest trade-offs in the current design:
+
+1. **Streaming-first API surface** — `ai_failover.py` is request/response today; TTFT is measured (`loomweaver ttft`) but tokens aren't streamed through the router API itself. First-class async streaming generators would cut perceived latency for chat UIs.
+2. **Response caching with semantic dedupe** — identical/near-identical prompts re-hit providers. A small embedding-based cache would cut free-tier quota burn meaningfully.
+3. **Cost tracking per provider** — metrics capture latency and success, not spend. Per-provider token + dollar accounting belongs in the same histogram.
+4. **Async rewrite of aihub** — aihub wraps litellm synchronously; concurrent multi-provider fan-out blocks threads. asyncio would make parallel failover probes cheap.
+
 ## License
 
 MIT
