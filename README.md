@@ -105,6 +105,12 @@ flippy reads keys from the environment (`~/.bashrc`, `.env`, whatever you use):
 
 Set just one and everything works; set all five for maximum resilience.
 
+## Security
+
+The agent runs model-chosen shell commands — read the honest threat model in
+[SECURITY.md](SECURITY.md): SSRF guards, path jail, env stripping, key
+redaction, cron allowlist, and `LOOMWEAVER_SAFE_MODE=1` to disable shell entirely.
+
 ## Testing
 
 ```bash
