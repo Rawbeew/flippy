@@ -75,22 +75,34 @@ def check_url(url):
 
 
 def check_path(path):
-    """Path jail. Returns (ok, reason). Allowed: inside PROJECT_ROOT or SCRATCH_DIR.
-    Denies dotfiles and credential-ish names anywhere."""
+    """Path jail. Returns (ok, reason).
+
+    Allowed: real paths inside PROJECT_ROOT (or LOOMWEAVER_SCRATCH).
+    Denied: dotfiles, credential-like names, and Windows-style absolute paths
+    when running on a POSIX host (where realpath would silently fold them
+    under the project root).
+    """
+    foreign_windows = bool(re.match(r"^[A-Za-z]:[\\/]", path)) or (
+        "\\" in path and os.sep != "\\")
     p = os.path.realpath(path)
     name = os.path.basename(p).lower()
     parts = Path(p).parts
+
     if name.startswith(".") or any(seg.startswith(".") and seg not in (".", "..")
                                    for seg in parts[1:]):
         return False, "dotfiles not allowed"
-    if re.search(r"(credential|secret|token|\.env|\.ssh|id_rsa|id_ed25519|\.pem|\.key)", p, re.I):
+    if re.search(r"(credential|secret|token|\.env|\.ssh|id_rsa|id_ed25519|\.pem|\.key)",
+                 p, re.I):
         return False, "credential-like path denied"
+
     allowed_roots = [PROJECT_ROOT]
     scratch = os.environ.get("LOOMWEAVER_SCRATCH")
     if scratch:
         allowed_roots.append(os.path.realpath(scratch))
-    if not any(p == r or p.startswith(r + os.sep) for r in allowed_roots):
-        return False, f"outside allowed roots ({', '.join(allowed_roots)})"
+    contained = any(p == r or p.startswith(r + os.sep) for r in allowed_roots)
+    if not contained:
+        return False, ("foreign absolute path denied" if foreign_windows
+                       else f"outside allowed roots ({', '.join(allowed_roots)})")
     return True, ""
 
 
