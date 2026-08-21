@@ -111,6 +111,21 @@ The agent runs model-chosen shell commands — read the honest threat model in
 [SECURITY.md](SECURITY.md): SSRF guards, path jail, env stripping, key
 redaction, cron allowlist, and `LOOMWEAVER_SAFE_MODE=1` to disable shell entirely.
 
+## Deployment
+
+flippy runs anywhere Python runs — it's stdlib-only with no services required.
+
+**Where it runs in production (my setups):**
+- **Local / VM**: long-lived process, keys in environment (`~/.bashrc` or a 600-perm credential file)
+- **Docker**: `COPY src/ .` + slim python:3.12 image; the router itself has zero build deps
+- **Serverless-ready**: `route()` is a pure function over env-configured providers — wrap it in any FaaS handler (Lambda/Cloud Functions) with no changes
+
+**Environment variables:** see [Credentials](#credentials) — one key minimum, all five for full failover depth.
+
+**Failure behavior:** free-first ordering; on 429/5xx or network error the next provider is tried within the same request; auth errors (401/403) skip to the next provider immediately. Prometheus-style latency histogram available via `render_metrics()`.
+
+**Cost:** $0 by design — every configured provider has a free tier. Paid capacity is never touched before free tiers are exhausted.
+
 ## Testing
 
 ```bash
