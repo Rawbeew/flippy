@@ -7,3 +7,4 @@ venv/
 # local vector store from aihub.py demos
 .aihub_vectors.json
 tts.mp3
+runs/
