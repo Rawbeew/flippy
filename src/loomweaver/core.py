@@ -139,7 +139,8 @@ class RunLog:
     """Append-only JSONL event log per run."""
 
     def __init__(self, runs_dir=None):
-        self.dir = runs_dir or os.path.join(os.path.dirname(__file__), "..", "runs",
+        # default: <repo-root>/runs/ — two levels up from this file (src/loomweaver/core.py)
+        self.dir = runs_dir or os.path.join(os.path.dirname(__file__), "..", "..", "runs",
                                             time.strftime("%Y%m%d-%H%M%S"))
         os.makedirs(self.dir, exist_ok=True)
         self.path = os.path.join(self.dir, "events.jsonl")

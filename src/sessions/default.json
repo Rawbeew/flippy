@@ -1,0 +1,39 @@
+{
+  "id": "default",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a terse autonomous agent. Achieve the user's goal using the available tools.\nRules:\n- Think step by step, but output only what's needed.\n- When you need a tool, call it. When the goal is achieved, reply with DONE: <one-line summary>.\n- Never invent tool results."
+    },
+    {
+      "role": "user",
+      "content": "GOAL: test"
+    },
+    {
+      "role": "user",
+      "content": "AVAILABLE TOOLS: http_get, read_file, write_file, list_dir, shell, remember\nTo use one, reply with ONLY JSON: {\"tool\": \"<name>\", \"args\": {...}}. When the goal is achieved, reply with ONLY JSON: {\"done\": \"<summary>\"}."
+    },
+    {
+      "role": "assistant",
+      "content": "{\"tool\": \"shell\", \"args\": {\"cmd\": \"echo test\"}}"
+    },
+    {
+      "role": "user",
+      "content": "TOOL_RESULT shell: exit=0\ntest"
+    },
+    {
+      "role": "user",
+      "content": "GOAL: test"
+    },
+    {
+      "role": "user",
+      "content": "AVAILABLE TOOLS: http_get, read_file, write_file, list_dir, shell, remember\nTo use one, reply with ONLY JSON: {\"tool\": \"<name>\", \"args\": {...}}. When the goal is achieved, reply with ONLY JSON: {\"done\": \"<summary>\"}."
+    },
+    {
+      "role": "assistant",
+      "content": "{\"done\": \"Test executed successfully: shell command ran with exit=0 and produced expected output 'test'.\"}"
+    }
+  ],
+  "facts": {},
+  "created": 1787334075.117205
+}

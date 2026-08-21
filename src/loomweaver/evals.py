@@ -48,7 +48,9 @@ SUITES = {"basic": SUITE_BASIC, "reasoning": SUITE_REASONING,
 def score_case(case, text):
     text_l = (text or "").strip().lower()
     if "check" in case:
-        return case["check"].lower() in text_l
+        # word-boundary match: '10' must not match '110', 'yes' not 'yes-adjacent'
+        return re.search(rf"(?<![a-z0-9-]){re.escape(case['check'].lower())}(?![a-z0-9-])",
+                         text_l) is not None
     if "check_json" in case:
         m = re.search(r"\{.*\}", text or "", re.S)
         if not m:

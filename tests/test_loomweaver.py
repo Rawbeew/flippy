@@ -179,3 +179,30 @@ class TestCronPaths:
         src = open(Path(__file__).parent.parent / "src" / "loomweaver" / "cron.py").read()
         assert '"src.loomweaver"' in src or "'src.loomweaver'" in src
         assert 'cwd=HERE' not in src
+
+
+class TestScorerEdgeCases:
+    """Sadist-pass: substring scorer must not false-positive."""
+
+    def test_no_substring_in_larger_number(self):
+        from loomweaver.evals import score_case
+        assert not score_case({"check": "10"}, "110")
+
+    def test_hyphenated_words_rejected(self):
+        from loomweaver.evals import score_case
+        assert not score_case({"check": "yes"}, "the answer is yes-adjacent")
+
+    def test_clean_match_passes(self):
+        from loomweaver.evals import score_case
+        assert score_case({"check": "391"}, "The answer is 391.")
+
+    def test_case_insensitive(self):
+        from loomweaver.evals import score_case
+        assert score_case({"check": "canberra"}, "CANBERRA")
+
+
+class TestRunLogLocation:
+    def test_runs_dir_is_project_root_not_src(self):
+        rl = RunLog()
+        resolved = os.path.realpath(rl.dir)
+        assert f"{os.sep}src{os.sep}runs" not in resolved
