@@ -8,8 +8,7 @@ import urllib.error
 import urllib.request
 
 CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
 
 
 # ---------------------------------------------------------------- credentials

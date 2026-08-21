@@ -25,7 +25,7 @@ def http_get(url, max_chars=2000):
     ok, reason = security.check_url(url)
     if not ok:
         return f"blocked: {reason}"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 Chrome/126.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "OpenAI File Downloader, XaiImageApiFetch/1.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return r.read().decode("utf-8", "ignore")[:max_chars]
 
