@@ -167,7 +167,7 @@ class SessionStore:
     """Persistent agent sessions: memory.json-style episode store."""
 
     def __init__(self, root=None):
-        self.root = root or os.path.join(os.path.dirname(__file__), "..", "sessions")
+        self.root = root or os.path.join(os.path.dirname(__file__), "..", "..", "sessions")
         os.makedirs(self.root, exist_ok=True)
 
     def _path(self, sid):

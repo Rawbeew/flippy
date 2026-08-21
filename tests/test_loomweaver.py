@@ -206,3 +206,8 @@ class TestRunLogLocation:
         rl = RunLog()
         resolved = os.path.realpath(rl.dir)
         assert f"{os.sep}src{os.sep}runs" not in resolved
+
+    def test_sessions_dir_is_project_root_not_src(self):
+        store = SessionStore()
+        resolved = os.path.realpath(store.root)
+        assert f"{os.sep}src{os.sep}sessions" not in resolved
