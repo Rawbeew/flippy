@@ -24,6 +24,11 @@ try:
 except ImportError:
     usage_mod = None  # degrade gracefully — /usage returns 501
 
+try:
+    from loomweaver.quota_ledger import get_quota_status as _quota_status
+except ImportError:
+    _quota_status = None  # degrade gracefully — /quota returns 501
+
 PORT = int(os.environ.get("PORT", "8080"))
 
 _lock = threading.Lock()
@@ -82,6 +87,10 @@ class Handler(BaseHTTPRequestHandler):
                 if usage_mod is None:
                     return self._send(501, {"error": "usage module unavailable"})
                 return self._send(200, usage_mod.render_json(usage_mod.summary()))
+            if self.path == "/quota":
+                if _quota_status is None:
+                    return self._send(501, {"error": "quota module unavailable"})
+                return self._send(200, _quota_status())
             return self._send(404, {"error": "not found"})
         except BrokenPipeError:
             pass

@@ -56,6 +56,9 @@ def main(argv=None):
     p.add_argument("--hours", type=int, default=24)
     p.add_argument("--json", action="store_true", help="emit JSON instead of a table")
 
+    # quota
+    p = sub.add_parser("quota", help="per-provider free-tier quota status")
+
     args = ap.parse_args(argv)
 
     if args.cmd == "providers":
@@ -83,6 +86,9 @@ def main(argv=None):
         s = _u.summary(hours=args.hours)
         print(json.dumps(_u.render_json(s), indent=2) if args.json
               else _u.render_text(s))
+    elif args.cmd == "quota":
+        from .quota_ledger import get_quota_status
+        print(json.dumps(get_quota_status(), indent=2))
     elif args.cmd == "armada":
         from .armada import Armada
         fleet = Armada(args.mission).standard_pipeline()

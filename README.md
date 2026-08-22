@@ -18,8 +18,10 @@ If one provider rate-limits you or goes down, the next one picks up mid-request.
 - Semantic response cache (TF-IDF cosine, stdlib-only) — near-duplicate prompts hit cache
 - Per-provider quota tracking — skips exhausted providers before the 429
 - Multi-key rotation per provider — comma-separated env vars
+- Usage dashboard — per-provider calls/errors/latency/tokens + cache savings (`usage` CLI, `/usage` endpoint)
+- Quota status endpoint — live per-provider free-tier headroom (`quota` CLI, `/quota` endpoint)
 - Agent loop with role-based tool restrictions (scout/builder/verifier/reporter)
-- 116 unit tests including failure injection (mocked 429s, timeouts, malformed responses)
+- 147 unit tests including failure injection (mocked 429s, timeouts, malformed responses)
 
 **Not verified / honest limitations:**
 - Zero external users. No production traffic has hit this code.
@@ -75,7 +77,7 @@ Request → cache check → quota check → key rotation → provider call → u
 | `src/flippy_providers.py` | Canonical provider registry (single source of truth) |
 | `src/ai_failover.py` | Standalone CLI router |
 | `src/aihub.py` | litellm-powered multimodal hub (optional: vision, RAG, TTS, STT) |
-| `src/server.py` | stdlib HTTP server: /v1/chat, /health, /metrics, /usage |
+| `src/server.py` | stdlib HTTP server: /v1/chat, /health, /metrics, /usage, /quota |
 | `src/loomweaver/` | Agent harness: routing core, agent loop, armada fleet, evals, security |
 
 ## Security
