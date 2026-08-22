@@ -1,168 +1,98 @@
-# flippy 🐟
+# flippy
 
-**Free-first multi-provider LLM inference, with a complete agent harness built in.**
-
-One stdlib-only Python package that routes your prompts across five free LLM providers,
-never stops on a rate limit, and ships with **Loomweaver** — an autonomous agent runner,
-eval suites, and inference load-testing.
+A multi-provider LLM failover router with an agent harness. Stdlib-only core.
+No production traffic yet — this is a well-tested personal tool, not battle-tested infrastructure.
 
 [![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
+![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Deps](https://img.shields.io/badge/router%20deps-stdlib%20only-blue)
 
----
+## What it actually does (no marketing)
 
-## Why flippy
+Routes LLM chat requests across 5 free-tier providers with automatic failover.
+If one provider rate-limits you or goes down, the next one picks up mid-request.
 
-Every free LLM provider rate-limits. Most apps die the day one does.
-flippy flips between them automatically:
+**Verified capabilities:**
+- Failover across OpenRouter, freeinference.org, Groq, NVIDIA NIM, Cloudflare Workers AI
+- Semantic response cache (TF-IDF cosine, stdlib-only) — near-duplicate prompts hit cache
+- Per-provider quota tracking — skips exhausted providers before the 429
+- Multi-key rotation per provider — comma-separated env vars
+- Agent loop with role-based tool restrictions (scout/builder/verifier/reporter)
+- 116 unit tests including failure injection (mocked 429s, timeouts, malformed responses)
 
-```
-your prompt ──▶ Router ──▶ ① OpenRouter ──fail──▶ ② freeinference ──fail──▶ ③ Groq ──▶ ✅ response
-                            (stealth/ox-alpha)     (minimax-m3 …)          (gpt-oss-*)
-```
-
-- **Free-first ordering** — paid capacity is never touched before free tiers
-- **Failover on 429/5xx** — transient errors move to the next provider mid-request
-- **Provider pinning** — `groq/openai/gpt-oss-20b` forces a provider; bare model IDs match any provider that has them
-- **Quota Ledger** — SQLite-tracked per-provider free-tier limits (`src/loomweaver/quota_ledger.py`); the router skips providers likely exhausted *before* hitting the 429, with escalating cooldowns (5m → 15m → 1h) and UTC-midnight resets. Limits overridable via `LOOMWEAVER_LIMITS_JSON`; inspect with `get_quota_status()`
-- **Zero dependencies** — the router and Loomweaver are pure Python stdlib
-
-## The two layers
-
-| Layer | Module | What it gives you |
-|---|---|---|
-| **Router** | `src/ai_failover.py` | One-shot chat with automatic failover + Prometheus-style latency metrics |
-| **AI Hub** | `src/aihub.py` | litellm-powered: chat, vision, function calling, embeddings/RAG, TTS, STT *(needs `pip install litellm edge-tts`)* |
-| **Loomweaver** | `src/loomweaver/` | Agent loop, eval suites, load testing, cron |
+**Not verified / honest limitations:**
+- Zero external users. No production traffic has hit this code.
+- Benchmarks are self-reported from a single machine on residential WiFi.
+- Free-tier providers only — paid overflow is untested.
+- The "semantic" cache is lexical TF-IDF, not embedding-based. It matches word overlap, not meaning.
+- No async/await. Threading-based hedging exists but the core is synchronous.
 
 ## Quickstart
 
 ```bash
 git clone https://github.com/Rawbeew/flippy && cd flippy
-export OPENROUTER_KEY=...      # any ONE of these is enough to start
-export FREEINFERENCE_KEY=...
-export GROQ_KEY=...
 
-# one-shot chat with failover
+# Set ONE key to start
+export GROQ_KEY=gsk_...
+
+# Chat with automatic failover
 python src/ai_failover.py "explain KV caches in one paragraph"
+
+# Or run the agent harness
+python -m src.loomweaver agent "check disk space using the shell tool"
+
+# Run the test suite
+pip install pytest && python -m pytest tests/ -q
 ```
 
-### Loomweaver — the harness
+## Docker
 
 ```bash
-python -m src.loomweaver providers                    # see what you're routed across
-python -m src.loomweaver agent "check disk space"     # autonomous goal → tools → done
-python -m src.loomweaver eval --suite basic           # score a model
-python -m src.loomweaver eval --suite tools           # tool-selection accuracy
-python -m src.loomweaver loadtest --provider groq     # concurrency + latency profile
-python -m src.loomweaver ttft                         # time-to-first-token sweep
-python -m src.loomweaver cron --daemon                # scheduled evals/loadtests
+cp .env.example .env       # add your keys
+docker compose up -d
+curl http://localhost:8080/health
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "hello"}]}'
 ```
 
-### AI Hub — multimodal *(optional deps)*
+## Architecture
 
-```bash
-pip install litellm edge-tts
-python src/aihub.py --chat "hello"
-python src/aihub.py --vision photo.jpg "what's in this?"
-python src/aihub.py --rag add "notes.txt" && python src/aihub.py --rag-chat "summarize my notes"
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow, module map,
+scaling points, and trade-offs table.
+
+```
+Request → cache check → quota check → key rotation → provider call → usage record
+                                                                        ↓
+                                                              failover on failure
 ```
 
-## Loomweaver in depth
+## Modules
 
-The agent loop: **goal → plan → act (tools) → observe → done**, with every step
-appended to a replayable JSONL event log (`runs/<timestamp>/events.jsonl`).
-
-Built-in tools: `shell`, `http_get`, `read_file`, `write_file`, `list_dir`, `remember`.
-Add your own in three lines:
-
-```python
-from loomweaver.tools import tool
-
-@tool("get_price", "Fetch BTC price", {"symbol": "str"})
-def get_price(symbol):
-    ...
-```
-
-Eval suites: `basic` · `reasoning` · `extraction` · `tools` — each case scored by
-substring, exact-JSON, or regex match, with per-case latency and provider attribution.
-
-Load tests report p50/max latency, requests/sec, tokens/sec, and success rate
-under configurable concurrency. The TTFT sweep streams from every provider and
-ranks them by first-token latency.
-
-## Credentials
-
-flippy reads keys from the environment (`~/.bashrc`, `.env`, whatever you use):
-
-| Env var | Provider | Notes |
-|---|---|---|
-| `OPENROUTER_KEY` | OpenRouter | primary slot |
-| `FREEINFERENCE_KEY` | freeinference.org | free tier |
-| `GROQ_KEY` | Groq | fastest streaming |
-| `NVIDIA_KEY` | NVIDIA NIM | 100+ models |
-| `CLOUDFLARE_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Workers AI | no streaming |
-
-Set just one and everything works; set all five for maximum resilience.
+| Module | Purpose |
+|---|---|
+| `src/flippy_providers.py` | Canonical provider registry (single source of truth) |
+| `src/ai_failover.py` | Standalone CLI router |
+| `src/aihub.py` | litellm-powered multimodal hub (optional: vision, RAG, TTS, STT) |
+| `src/server.py` | stdlib HTTP server: /v1/chat, /health, /metrics, /usage |
+| `src/loomweaver/` | Agent harness: routing core, agent loop, armada fleet, evals, security |
 
 ## Security
 
-The agent runs model-chosen shell commands — read the honest threat model in
-[SECURITY.md](SECURITY.md): SSRF guards, path jail, env stripping, key
-redaction, cron allowlist, and `LOOMWEAVER_SAFE_MODE=1` to disable shell entirely.
+Read [SECURITY.md](SECURITY.md) for the threat model: SSRF guards, path jail,
+env stripping, key redaction, cron allowlist, and `LOOMWEAVER_SAFE_MODE=1`.
 
-## Deployment
+## Limitations
 
-flippy runs anywhere Python runs — it's stdlib-only with no services required.
+This is explicitly what flippy does NOT have:
 
-**Container:** `docker build -t flippy . && docker run -d -p 8080:8080 --env-file .env flippy` —
-serves `GET /health`, `GET /metrics` (Prometheus, `flippy_*`), and
-`POST /v1/chat/completions` (OpenAI-shaped, failover-routed). Keys come from env only.
-One-command cloud paths (Fly.io / VPS compose / Cloud Run, all $0 free tiers) are in
-[deploy/README.md](deploy/README.md); `fly.toml` is included.
-
-**Where it runs in production (my setups):**
-- **Local / VM**: long-lived process, keys in environment (`~/.bashrc` or a 600-perm credential file)
-- **Docker**: `COPY src/ .` + slim python:3.12 image; the router itself has zero build deps
-- **Serverless-ready**: `route()` is a pure function over env-configured providers — wrap it in any FaaS handler (Lambda/Cloud Functions) with no changes
-
-**Environment variables:** see [Credentials](#credentials) — one key minimum, all five for full failover depth.
-
-**Failure behavior:** free-first ordering; on 429/5xx or network error the next provider is tried within the same request; auth errors (401/403) skip to the next provider immediately. Prometheus-style latency histogram available via `render_metrics()`.
-
-**Cost:** $0 by design — every configured provider has a free tier. Paid capacity is never touched before free tiers are exhausted.
-
-## Testing
-
-```bash
-pip install pytest
-python -m pytest tests/ -q      # 15 unit tests, fully mocked — no network
-```
-
-CI runs tests on Python 3.11–3.13 plus compile checks and a credential-free CLI smoke test.
-
-## Measured numbers
-
-From `benchmarks/RESULTS.md` (2026-08-21, 20 requests/provider, real keys):
-
-| Provider | Model | Success | p50 latency | p95 latency | Tokens/s |
-|---|---|---|---|---|---|
-| groq | `openai/gpt-oss-20b` | 100% | 0.221 s | 0.397 s | 35.4 |
-| openrouter | `stealth/ox-alpha` | 100% | 1.058 s | 1.251 s | 7.3 |
-| freeinference | `minimax-m3` | 100% | 1.166 s | 2.817 s | 7.2 |
-| cloudflare / nvidia | — | 0% (401 / 403 — stale tokens) | — | — | — |
-
-The two dead providers are the point: the router skipped both and every request still landed on a healthy provider within the same call. Re-run yourself with `python benchmarks/run_bench.py`.
-
-## What I would improve next
-
-Honest trade-offs in the current design:
-
-1. **Streaming-first API surface** — `ai_failover.py` is request/response today; TTFT is measured (`loomweaver ttft`) but tokens aren't streamed through the router API itself. First-class async streaming generators would cut perceived latency for chat UIs.
-2. **Response caching with semantic dedupe** — identical/near-identical prompts re-hit providers. A small embedding-based cache would cut free-tier quota burn meaningfully.
-3. **Cost tracking per provider** — metrics capture latency and success, not spend. Per-provider token + dollar accounting belongs in the same histogram.
-4. **Async rewrite of aihub** — aihub wraps litellm synchronously; concurrent multi-provider fan-out blocks threads. asyncio would make parallel failover probes cheap.
+- **No production deployment.** It runs on my machine. Nobody else's traffic has hit it.
+- **No async.** Synchronous routing with threading for hedged requests.
+- **Lexical cache only.** TF-IDF cosine on words, not embeddings. Won't match paraphrases that change vocabulary.
+- **Free tiers only.** Paid overflow is configured but untested.
+- **Single-process.** No multi-worker mode; SQLite state won't survive concurrent writers at scale.
+- **Self-reported benchmarks.** All latency numbers are from my laptop.
 
 ## License
 

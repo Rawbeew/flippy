@@ -1,26 +1,24 @@
 # flippy — LLM.txt
 
-flippy is a free-first multi-provider LLM inference router with an integrated
-agent harness (Loomweaver). Pure Python stdlib; optional litellm for multimodal.
+flippy is a multi-provider LLM failover router with an agent harness.
+Pure Python stdlib for the core; optional litellm for multimodal.
 
-## Capabilities
-- Automatic failover across OpenRouter, freeinference.org, Groq, NVIDIA NIM, Cloudflare Workers AI
-- Provider pinning via `provider/model` syntax; exact model-ID matching
-- Autonomous agent loop with tool registry (shell, http, filesystem, memory)
-- Eval suites: basic, reasoning, extraction, tool-selection accuracy
-- Inference load testing: concurrency, p50/max latency, tokens/sec, streaming TTFT
-- Local cron scheduler for recurring evals and load tests
-- JSONL event logging for every run (replayable)
+## What it does
+- Routes chat requests across 5 free-tier providers with automatic failover
+- Semantic response cache (TF-IDF cosine, SQLite-backed)
+- Per-provider quota tracking with cooldown before rate-limit hits
+- Multi-key rotation per provider
+- Agent loop with role-based tool restrictions (scout/builder/verifier/reporter)
+- Eval suites and load-testing tools
+- 116 unit tests including failure injection
 
 ## Key commands
 - `python src/ai_failover.py "prompt"` — one-shot chat with failover
 - `python -m src.loomweaver providers` — list providers
 - `python -m src.loomweaver agent "<goal>"` — run the agent
 - `python -m src.loomweaver eval --suite <name>` — run evals
-- `python -m src.loomweaver loadtest --provider <name>` — load test
-- `python -m src.loomweaver ttft` — streaming latency sweep
+- `docker compose up && curl localhost:8080/health` — containerized
 
 ## Links
 - Repo: https://github.com/Rawbeew/flippy
 - License: MIT
-- Related: https://github.com/Rawbeew (author)
