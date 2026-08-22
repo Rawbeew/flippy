@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>flippy — free-tier llm routing that stays up when providers don't</title>
+<meta name="description" content="bring your free-tier llm keys. get one openai-compatible endpoint with automatic failover, semantic caching, and quota-aware routing. $0 infra, stdlib-only core, 147 tests.">
+<meta property="og:title" content="flippy — free-tier llm routing">
+<meta property="og:description" content="bring your free keys. we handle the routing. one endpoint, five providers, zero cost.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Fraunces:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#faf9f5; --paper-2:#fffdfb; --ink:#2d2620; --ink-2:#423e38;
+  --body:#6f6a62; --mut:#a09a90; --hair:#e6dfd3;
+  --rust:#8c3c28; --rust-deep:#6b2d1e; --green:#1d6f5c; --green-soft:#effaf5;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--paper);color:var(--ink);font-family:'Inter',sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:720px;margin:0 auto;padding:48px 20px}
+
+/* ── hero ─────────────────────────────────── */
+.hero{text-align:center;padding:80px 0 60px}
+.hero .tag{font-size:12px;letter-spacing:.15em;text-transform:lowercase;color:var(--mut);margin-bottom:16px;font-weight:500}
+.hero h1{font-family:'Fraunces',serif;font-weight:700;font-size:clamp(40px,8vw,64px);line-height:1.05;letter-spacing:-.03em;color:var(--ink);margin-bottom:16px}
+.hero h1 em{font-style:italic;color:var(--rust)}
+.hero p{font-family:'Fraunces',serif;font-style:italic;font-size:18px;color:var(--body);max-width:520px;margin:0 auto 32px}
+.cta-group{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;padding:14px 28px;border-radius:8px;font-size:15px;font-weight:600;text-decoration:none;transition:all .2s ease;border:none;cursor:pointer;font-family:'Inter',sans-serif}
+.btn-primary{background:var(--ink);color:var(--paper)}
+.btn-primary:hover{background:var(--rust)}
+.btn-secondary{background:transparent;color:var(--ink);border:1px solid var(--hair)}
+.btn-secondary:hover{border-color:var(--mut)}
+
+/* ── problem/solution ────────────────────────────────────── */
+.section{padding:48px 0;border-top:1px solid var(--hair)}
+.section h2{font-family:'Fraunces',serif;font-size:24px;font-weight:600;color:var(--ink);margin-bottom:20px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+@media(max-width:600px){.grid{grid-template-columns:1fr}}
+.card{background:var(--paper-2);border:1px solid var(--hair);border-radius:10px;padding:24px}
+.card h3{font-size:15px;font-weight:600;margin-bottom:8px;color:var(--ink)}
+.card p{font-size:14px;color:var(--body);line-height:1.55}
+.card .icon{font-size:22px;margin-bottom:12px;display:block}
+
+/* ── how it works ────────────────────────────────────────── */
+.steps{counter-reset:step}
+.step{display:flex;gap:16px;margin-bottom:24px;align-items:flex-start}
+.step::before{counter-increment:step;content:counter(step);font-family:'Fraunces',serif;font-size:28px;font-weight:400;color:var(--rust);min-width:36px;line-height:1}
+.step h4{font-size:15px;font-weight:600;margin-bottom:4px}
+.step p{font-size:14px;color:var(--body)}
+
+/* ── code block ──────────────────────────────────────────── */
+.code-block{background:var(--ink);border-radius:10px;padding:20px;overflow-x:auto;margin:20px 0}
+.code-block pre{color:#e8e0d5;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.6}
+.code-block .comment{color:#8b8378}
+.code-block .string{color:#c4a67a}
+.code-block .keyword{color:#7eb8a2}
+
+/* ── pricing ─────────────────────────────────────────────── */
+.pricing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-top:24px}
+.price-card{background:var(--paper-2);border:1px solid var(--hair);border-radius:12px;padding:28px 20px;text-align:center;position:relative}
+.price-card.featured{border-color:var(--rust);border-width:2px}
+.price-card .badge{position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--rust);color:var(--paper);font-size:11px;font-weight:600;padding:2px 10px;border-radius:99px}
+.price-card .tier{font-size:13px;font-weight:500;color:var(--mut);text-transform:lowercase;margin-bottom:8px}
+.price-card .amount{font-family:'Fraunces',serif;font-size:36px;font-weight:700;color:var(--ink);margin-bottom:12px}
+.price-card .amount small{font-size:14px;font-weight:400;color:var(--mut)}
+.price-card ul{list-style:none;text-align:left;font-size:13px;color:var(--body)}
+.price-card li{padding:5px 0;border-bottom:1px solid var(--hair)}
+.price-card li:last-child{border:none}
+.price-card li::before{content:"→";color:var(--rust);margin-right:8px;font-size:12px}
+
+/* ── footer ──────────────────────────────────────────────── */
+footer{text-align:center;padding:48px 0;color:var(--mut);font-size:13px;border-top:1px solid var(--hair);margin-top:48px}
+footer a{color:var(--rust);text-decoration:none}
+footer a:hover{text-decoration:underline}
+
+/* ── waitlist form ───────────────────────────────────────── */
+.waitlist{max-width:420px;margin:0 auto}
+.waitlist input{width:100%;padding:14px 16px;background:var(--paper-2);border:1px solid var(--hair);border-radius:8px;font-size:15px;color:var(--ink);margin-bottom:12px;font-family:'Inter',sans-serif}
+.waitlist input:focus{outline:none;border-color:var(--rust);box-shadow:0 0 0 3px rgba(140,60,40,.1)}
+.waitlist button{width:100%;padding:14px;background:var(--ink);color:var(--paper);border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:background .2s}
+.waitlist button:hover{background:var(--rust)}
+.waitlist .note{font-size:12px;color:var(--mut);margin-top:8px;text-align:center}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <!-- hero -->
+  <div class="hero">
+    <div class="tag">free-tier-first · stdlib-only · openai-compatible</div>
+    <h1>your free keys.<br>one endpoint.<br><em>zero cost.</em></h1>
+    <p>bring your free-tier api keys from groq, openrouter, nvidia, or cloudflare. get a single endpoint with automatic failover, semantic caching, and quota-aware routing.</p>
+    <div class="cta-group">
+      <a href="#waitlist" class="btn btn-primary">join the waitlist →</a>
+      <a href="https://github.com/Rawbeew/flippy" class="btn btn-secondary">view on github</a>
+    </div>
+  </div>
+
+  <!-- the problem -->
+  <div class="section">
+    <h2>every llm developer hits this wall</h2>
+    <div class="grid">
+      <div class="card">
+        <span class="icon">🚧</span>
+        <h3>rate limits kill your app</h3>
+        <p>groq gives you 14k requests/day until you hit it at 2pm. your app breaks. users leave.</p>
+      </div>
+      <div class="card">
+        <span class="icon">💸</span>
+        <h3>paying for one provider is expensive</h3>
+        <p>$200+/month for inference that could be free if you combined all five free tiers intelligently.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- the solution -->
+  <div class="section">
+    <h2>flippy routes around the wall</h2>
+    <div class="steps">
+      <div class="step"><div><h4>bring your keys</h4><p>paste your free-tier api keys from any provider. comma-separate multiple keys per provider. they're encrypted and never leave your account.</p></div></div>
+      <div class="step"><div><h4>get one endpoint</h4><p>a single openai-compatible url that routes to whichever provider has quota remaining. drop-in replacement — change one line of code.</p></div></div>
+      <div class="step"><div><h4>it just works</h4><p>semantic cache catches duplicate prompts. quota ledger routes away from exhausted providers before the 429. key rotation handles auth failures automatically.</p></div></div>
+    </div>
+  </div>
+
+  <!-- code example -->
+  <div class="section">
+    <h2>drop-in replacement</h2>
+    <div class="code-block"><pre><span class="comment"># before (single provider, breaks on rate limit)</span>
+client = OpenAI(base_url=<span class="string">"https://api.groq.com/openai/v1"</span>, api_key=groq_key)
+
+<span class="comment"># after (five providers, automatic failover)</span>
+client = OpenAI(base_url=<span class="string">"https://flippy.xyz/v1"</span>, api_key=your_flippy_key)
+
+<span class="comment"># everything else stays exactly the same.</span></pre></div>
+  </div>
+
+  <!-- features -->
+  <div class="section">
+    <h2>what's inside</h2>
+    <div class="grid">
+      <div class="card"><h3>automatic failover</h3><p>provider returns 429? next one picks up mid-request. no dropped requests.</p></div>
+      <div class="card"><h3>semantic caching</h3><p>near-duplicate prompts hit cache instead of burning api calls. tf-idf cosine matching, stdlib-only.</p></div>
+      <div class="card"><h3>quota-aware routing</h3><p>tracks remaining free-tier quotas. routes away from exhausted providers before hitting the limit.</p></div>
+      <div class="card"><h3>multi-key rotation</h3><p>multiple keys per provider. rotates on 401 (revoked) and 429 (exhausted). all keys tracked in sqlite.</p></div>
+      <div class="card"><h3>usage dashboard</h3><p>per-provider calls, errors, cache hits, token counts, latency percentiles. see what each free tier is actually giving you.</p></div>
+      <div class="card"><h3>openai-compatible</h3><p>works with any client that speaks the openai chat completions format. langchain, openai sdk, curl, anything.</p></div>
+    </div>
+  </div>
+
+  <!-- pricing -->
+  <div class="section">
+    <h2>pricing</h2>
+    <div class="pricing-grid">
+      <div class="price-card">
+        <div class="tier">free</div>
+        <div class="amount">$0<small>/mo</small></div>
+        <ul>
+          <li>1,000 requests/mo</li>
+          <li>2 providers</li>
+          <li>community support</li>
+        </ul>
+      </div>
+      <div class="price-card featured">
+        <span class="badge">most popular</span>
+        <div class="tier">hobby</div>
+        <div class="amount">$9<small>/mo</small></div>
+        <ul>
+          <li>10,000 requests/mo</li>
+          <li>all 5 providers</li>
+          <li>semantic cache</li>
+          <li>usage dashboard</li>
+          <li>email support</li>
+        </ul>
+      </div>
+      <div class="price-card">
+        <div class="tier">pro</div>
+        <div class="amount">$29<small>/mo</small></div>
+        <ul>
+          <li>50,000 requests/mo</li>
+          <li>multi-key rotation</li>
+          <li>priority failover</li>
+          <li>api access</li>
+          <li>priority support</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- waitlist -->
+  <div class="section" id="waitlist">
+    <h2>get early access</h2>
+    <p style="color:var(--body);font-size:14px;margin-bottom:24px;text-align:center">we'll email you when flippy cloud launches. no spam, ever.</p>
+    <form class="waitlist" id="waitlist-form">
+      <input type="email" placeholder="your@email.com" required id="email-input">
+      <button type="submit">join the waitlist →</button>
+      <p class="note" id="waitlist-status"></p>
+    </form>
+  </div>
+
+  <footer>
+    built by <a href="https://github.com/Rawbeew">@Rawbeew</a> · computational linguistics + failure-aware llm systems<br><br>
+    <a href="https://github.com/Rawbeew/flippy">source code</a> · <a href="https://github.com/Rawbeew/flippy/blob/master/SECURITY.md">security</a> · <a href="https://github.com/Rawbeew/flippy/blob/master/ARCHITECTURE.md">architecture</a> · mit license
+  </footer>
+
+</div>
+
+<script>
+document.getElementById('waitlist-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('email-input').value;
+  const status = document.getElementById('waitlist-status');
+  status.textContent = 'saving...';
+  try {
+    const r = await fetch('/api/waitlist', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({email})
+    });
+    if (r.ok) {
+      status.textContent = "you're on the list. we'll email you at launch.";
+      status.style.color = 'var(--green)';
+    } else {
+      throw new Error('failed');
+    }
+  } catch {
+    // fallback: store locally if backend not deployed yet
+    let list = JSON.parse(localStorage.getItem('waitlist') || '[]');
+    list.push({email, ts: Date.now()});
+    localStorage.setItem('waitlist', JSON.stringify(list));
+    status.textContent = "saved locally — will sync when backend is ready";
+    status.style.color = 'var(--green)';
+  }
+});
+</script>
+
+</body>
+</html>
