@@ -33,6 +33,12 @@ def main(argv=None):
     p.add_argument("--concurrency", type=int, default=4)
     p.add_argument("--requests", type=int, default=8)
 
+    # armada
+    p = sub.add_parser("armada", help="launch a named agent fleet on a mission")
+    p.add_argument("mission")
+    p.add_argument("--pipeline", default="standard", choices=["standard"])
+    p.add_argument("--max-steps", type=int, default=12, help="steps per agent")
+
     # providers
     p = sub.add_parser("providers", help="list configured providers/models")
 
@@ -67,6 +73,11 @@ def main(argv=None):
         cron.cli(args)
     elif args.cmd == "ttft":
         print(json.dumps(loadtest.ttft_sweep(), indent=2))
+    elif args.cmd == "armada":
+        from .armada import Armada
+        fleet = Armada(args.mission).standard_pipeline()
+        result = fleet.execute(creds=load_creds(), max_steps_per_agent=args.max_steps)
+        print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
