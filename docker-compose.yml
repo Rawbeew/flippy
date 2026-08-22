@@ -1,0 +1,11 @@
+services:
+  flippy:
+    build: .
+    image: flippy
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env            # OPENROUTER_KEY=..., GROQ_KEY=... etc (see .env.example)
+    environment:
+      - PORT=8080
+    restart: unless-stopped
