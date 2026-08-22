@@ -9,10 +9,12 @@ import urllib.request
 
 try:
     from . import quota_ledger as _ql
+    from . import semantic_cache as _sc
 except ImportError:  # running as a top-level package: add src/ to path and retry
     import sys as _sys
     _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from loomweaver import quota_ledger as _ql
+    from loomweaver import semantic_cache as _sc
 
 CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
 UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
@@ -110,6 +112,19 @@ def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
     """
     last = None
     ledger = _ql.get_ledger()
+    # --- semantic response cache: exact hash fast path, similarity fallback ---
+    if _sc.cache_enabled() and not _sc.is_stateful(messages):
+        try:
+            hit = _sc.get_cache().lookup(messages)
+            if hit:
+                if on_event:
+                    on_event({"type": "cache_hit", "similarity": hit["similarity"],
+                              "exact": hit["exact"]})
+                return {"ok": True, "text": hit["response"], "usage": {}, "latency": 0.0,
+                        "provider": "cache", "model": model or "", "cached": True,
+                        "similarity": hit["similarity"]}
+        except Exception:
+            pass  # cache must never break routing
     for prov in build_providers(creds or load_creds()):
         m = None
         if model:
@@ -133,6 +148,11 @@ def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
         if r.get("ok"):
             r["provider"] = prov["name"]
             r["model"] = m or ""
+            if _sc.cache_enabled() and not _sc.is_stateful(messages):
+                try:
+                    _sc.get_cache().store(messages, r.get("text", ""), model_tag=m or "")
+                except Exception:
+                    pass
             return r
         last = r
     return {"ok": False, "error": (last or {}).get("error", "all providers failed")}
