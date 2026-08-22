@@ -115,6 +115,12 @@ redaction, cron allowlist, and `LOOMWEAVER_SAFE_MODE=1` to disable shell entirel
 
 flippy runs anywhere Python runs — it's stdlib-only with no services required.
 
+**Container:** `docker build -t flippy . && docker run -d -p 8080:8080 --env-file .env flippy` —
+serves `GET /health`, `GET /metrics` (Prometheus, `flippy_*`), and
+`POST /v1/chat/completions` (OpenAI-shaped, failover-routed). Keys come from env only.
+One-command cloud paths (Fly.io / VPS compose / Cloud Run, all $0 free tiers) are in
+[deploy/README.md](deploy/README.md); `fly.toml` is included.
+
 **Where it runs in production (my setups):**
 - **Local / VM**: long-lived process, keys in environment (`~/.bashrc` or a 600-perm credential file)
 - **Docker**: `COPY src/ .` + slim python:3.12 image; the router itself has zero build deps
