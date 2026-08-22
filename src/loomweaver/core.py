@@ -7,7 +7,12 @@ import time
 import urllib.error
 import urllib.request
 
-from loomweaver import quota_ledger as _ql
+try:
+    from . import quota_ledger as _ql
+except ImportError:  # running as a top-level package: add src/ to path and retry
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from loomweaver import quota_ledger as _ql
 
 CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
 UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
