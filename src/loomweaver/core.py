@@ -1,4 +1,5 @@
 """core.py — provider registry, failover router, event log, session store."""
+from __future__ import annotations
 import json
 import os
 import re
@@ -24,7 +25,7 @@ UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
 
 # ---------------------------------------------------------------- credentials
 
-def load_creds(path=CREDS_PATH):
+def load_creds(path: str = CREDS_PATH) -> dict[str, str]:
     d = {}
     if os.path.exists(path):
         for line in open(path, encoding="utf-8"):
@@ -37,7 +38,7 @@ def load_creds(path=CREDS_PATH):
 
 # ---------------------------------------------------------------- providers
 
-def build_providers(creds=None):
+def build_providers(creds: dict[str, str] | None = None) -> list[dict]:
     """Canonical list comes from providers.py; creds dict (from a credentials
     file) is mapped onto env-var names for compatibility."""
     try:
@@ -60,14 +61,15 @@ def build_providers(creds=None):
     return _reg.get_providers()
 
 
-def is_retryable(status, body):
+def is_retryable(status: int | None, body: dict | None) -> bool:
     if status == 429 or (status and status >= 500):
         return True
     s = json.dumps(body).lower() if body else ""
     return any(k in s for k in ("rate limit", "too many requests", "quota", "try again later"))
 
 
-def chat(prov, messages, model=None, max_tokens=1024, timeout=120):
+def chat(prov: dict, messages: list[dict], model: str | None = None,
+         max_tokens: int = 1024, timeout: int = 120) -> dict:
     """One chat call to one provider. Returns dict with text/usage/latency."""
     h = {"Authorization": f"Bearer {prov['key']}", "Content-Type": "application/json",
          "User-Agent": UA}
@@ -104,7 +106,9 @@ def chat(prov, messages, model=None, max_tokens=1024, timeout=120):
     return {"ok": True, "text": text, "usage": usage, "latency": latency}
 
 
-def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
+def route(messages: list[dict], model: str | None = None,
+          max_tokens: int = 1024, creds: dict[str, str] | None = None,
+          on_event: callable | None = None) -> dict:
     """Failover across all providers; returns first ok result + which provider won.
 
     Model pinning:
