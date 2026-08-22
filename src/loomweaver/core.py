@@ -123,6 +123,70 @@ def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
     return {"ok": False, "error": (last or {}).get("error", "all providers failed")}
 
 
+def route_hedged(messages, model=None, max_tokens=1024, creds=None, delay_ms=250,
+                 on_event=None):
+    """Hedged-request router: fire the top 2 eligible providers concurrently
+    (the second after `delay_ms`), take the first success, abandon the loser.
+
+    Tail-latency pattern: a slow first response no longer blocks when a second
+    provider answers faster. Falls back to sequential route() when fewer than
+    two providers match. Threading-based (no asyncio), stdlib only.
+
+    Note: on a slow tail both providers complete, so hedging can burn 2x quota.
+    """
+    provs = []
+    for prov in build_providers(creds or load_creds()):
+        m = None
+        if model:
+            if any(model == x for x in prov["models"]):
+                m = model
+            elif "/" in model and model.split("/", 1)[0] == prov["name"]:
+                m = model.split("/", 1)[1]
+            else:
+                continue
+        provs.append((prov, m))
+        if len(provs) == 2:
+            break
+
+    if len(provs) < 2:
+        return route(messages, model=model, max_tokens=max_tokens, creds=creds,
+                     on_event=on_event)
+
+    result = {}
+    done = threading.Event()
+
+    def _attempt(prov, m, idx):
+        r = chat(prov, messages, model=m, max_tokens=max_tokens)
+        if on_event:
+            try:
+                on_event({"type": "hedged_call", "provider": prov["name"], "model": m,
+                          "ok": r.get("ok"), "latency": round(r.get("latency", 0), 3),
+                          "attempt": idx})
+            except Exception:
+                pass
+        if r.get("ok") and not done.is_set():
+            r["provider"] = prov["name"]
+            r["model"] = m or ""
+            r["hedged"] = {"attempt": idx}
+            result["win"] = r
+            done.set()
+        elif not r.get("ok"):
+            result.setdefault("last_err", r)
+
+    t1 = threading.Thread(target=_attempt, args=provs[0] + (1,), daemon=True)
+    t1.start()
+    time.sleep(delay_ms / 1000.0)
+    t2 = threading.Thread(target=_attempt, args=provs[1] + (2,), daemon=True)
+    t2.start()
+    # Wait for a winner; if none, wait for both to finish to collect the error.
+    while not done.is_set() and (t1.is_alive() or t2.is_alive()):
+        done.wait(0.05)
+    if done.is_set():
+        return result["win"]
+    last = result.get("last_err") or {}
+    return {"ok": False, "error": last.get("error", "all providers failed")}
+
+
 # ---------------------------------------------------------------- run events
 
 class RunLog:
