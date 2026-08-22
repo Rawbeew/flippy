@@ -19,6 +19,14 @@ except ImportError:  # running as a top-level package: add src/ to path and retr
     from loomweaver import semantic_cache as _sc
     from loomweaver import usage as _usage
 
+try:  # key rotation is additive — other armada agents' modules must not break us
+    from . import key_rotation as _kr
+except ImportError:
+    try:
+        from loomweaver import key_rotation as _kr
+    except ImportError:
+        _kr = None
+
 CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
 UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
 
@@ -106,6 +114,55 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
     return {"ok": True, "text": text, "usage": usage, "latency": latency}
 
 
+def chat_with_rotation(prov: dict, messages: list[dict], model: str | None = None,
+                       max_tokens: int = 1024, timeout: int = 120,
+                       on_event: callable | None = None) -> dict:
+    """chat() with multi-key rotation.
+
+    Walks the provider's live keys (key_rotation state): on 401/403 the key is
+    marked permanently dead and the SAME provider is retried with the next key;
+    on 429 the key is marked exhausted (cooldown) and we move to the next
+    key/provider. All keys dead -> provider unavailable (returns last error).
+    """
+    keys = prov.get("keys") or [prov.get("key")]
+    state = _kr.get_state() if _kr else None
+    pairs = state.live_pairs(prov["name"], keys) if state else list(enumerate(keys))
+    if not pairs:
+        if on_event:
+            on_event({"type": "keys_exhausted", "provider": prov["name"]})
+        return {"ok": False, "status": None, "retryable": False,
+                "error": f"all {len(keys)} key(s) dead/exhausted for {prov['name']}"}
+    last = None
+    for key, idx in pairs:
+        p2 = dict(prov)
+        p2["key"] = key
+        r = chat(p2, messages, model=model, max_tokens=max_tokens, timeout=timeout)
+        if r.get("ok"):
+            if state:
+                state.advance(prov["name"], idx)
+            return r
+        status = r.get("status")
+        reason = f"key {_kr.mask(key) if _kr else idx}: {str(r.get('error'))[:120]}"
+        if status in (401, 403):
+            # revoked key — permanent skip, retry same provider with next key
+            if state:
+                state.mark_dead(prov["name"], idx, reason=reason)
+            if on_event:
+                on_event({"type": "key_dead", "provider": prov["name"],
+                          "key_index": idx, "status": status})
+            last = r
+            continue
+        if status == 429 and state:
+            state.mark_exhausted(prov["name"], idx,
+                                 retry_after=_kr.parse_retry_after(r))
+            if on_event:
+                on_event({"type": "key_exhausted", "provider": prov["name"],
+                          "key_index": idx})
+        last = r
+        break  # non-auth failure: existing provider-level failover handles it
+    return last or {"ok": False, "error": "no key attempted"}
+
+
 def route(messages: list[dict], model: str | None = None,
           max_tokens: int = 1024, creds: dict[str, str] | None = None,
           on_event: callable | None = None) -> dict:
@@ -147,7 +204,8 @@ def route(messages: list[dict], model: str | None = None,
                 on_event({"type": "quota_skip", "provider": prov["name"], "reason": reason})
             continue  # route away before hitting the 429
         ledger.record_request(prov["name"])
-        r = chat(prov, messages, model=m, max_tokens=max_tokens)
+        r = chat_with_rotation(prov, messages, model=m, max_tokens=max_tokens,
+                               on_event=on_event)
         ledger.record_result(prov["name"], r.get("status") if not r.get("ok") else 200)
         if on_event:
             on_event({"type": "llm_call", "provider": prov["name"], "model": m,
