@@ -25,6 +25,7 @@ your prompt ──▶ Router ──▶ ① OpenRouter ──fail──▶ ② fr
 - **Free-first ordering** — paid capacity is never touched before free tiers
 - **Failover on 429/5xx** — transient errors move to the next provider mid-request
 - **Provider pinning** — `groq/openai/gpt-oss-20b` forces a provider; bare model IDs match any provider that has them
+- **Quota Ledger** — SQLite-tracked per-provider free-tier limits (`src/loomweaver/quota_ledger.py`); the router skips providers likely exhausted *before* hitting the 429, with escalating cooldowns (5m → 15m → 1h) and UTC-midnight resets. Limits overridable via `LOOMWEAVER_LIMITS_JSON`; inspect with `get_quota_status()`
 - **Zero dependencies** — the router and Loomweaver are pure Python stdlib
 
 ## The two layers

@@ -7,6 +7,8 @@ import time
 import urllib.error
 import urllib.request
 
+from loomweaver import quota_ledger as _ql
+
 CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
 UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
 
@@ -102,6 +104,7 @@ def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
       - None             → each provider's default model
     """
     last = None
+    ledger = _ql.get_ledger()
     for prov in build_providers(creds or load_creds()):
         m = None
         if model:
@@ -111,7 +114,14 @@ def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
                 m = model.split("/", 1)[1]  # provider-pinned: strip the prefix
             else:
                 continue  # pinned to a different provider/model — skip this one
+        allowed, reason = ledger.check_quota(prov["name"])
+        if not allowed:
+            if on_event:
+                on_event({"type": "quota_skip", "provider": prov["name"], "reason": reason})
+            continue  # route away before hitting the 429
+        ledger.record_request(prov["name"])
         r = chat(prov, messages, model=m, max_tokens=max_tokens)
+        ledger.record_result(prov["name"], r.get("status") if not r.get("ok") else 200)
         if on_event:
             on_event({"type": "llm_call", "provider": prov["name"], "model": m,
                       "ok": r.get("ok"), "latency": round(r.get("latency", 0), 3)})
