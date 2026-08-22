@@ -51,6 +51,11 @@ def main(argv=None):
     # ttft
     p = sub.add_parser("ttft", help="streaming TTFT sweep across providers")
 
+    # usage
+    p = sub.add_parser("usage", help="per-provider usage dashboard")
+    p.add_argument("--hours", type=int, default=24)
+    p.add_argument("--json", action="store_true", help="emit JSON instead of a table")
+
     args = ap.parse_args(argv)
 
     if args.cmd == "providers":
@@ -73,6 +78,11 @@ def main(argv=None):
         cron.cli(args)
     elif args.cmd == "ttft":
         print(json.dumps(loadtest.ttft_sweep(), indent=2))
+    elif args.cmd == "usage":
+        from . import usage as _u
+        s = _u.summary(hours=args.hours)
+        print(json.dumps(_u.render_json(s), indent=2) if args.json
+              else _u.render_text(s))
     elif args.cmd == "armada":
         from .armada import Armada
         fleet = Armada(args.mission).standard_pipeline()

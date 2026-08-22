@@ -10,11 +10,13 @@ import urllib.request
 try:
     from . import quota_ledger as _ql
     from . import semantic_cache as _sc
+    from . import usage as _usage
 except ImportError:  # running as a top-level package: add src/ to path and retry
     import sys as _sys
     _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from loomweaver import quota_ledger as _ql
     from loomweaver import semantic_cache as _sc
+    from loomweaver import usage as _usage
 
 CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
 UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
@@ -120,6 +122,7 @@ def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
                 if on_event:
                     on_event({"type": "cache_hit", "similarity": hit["similarity"],
                               "exact": hit["exact"]})
+                _usage.record("cache", model or "", True, 0.0, cached=True)
                 return {"ok": True, "text": hit["response"], "usage": {}, "latency": 0.0,
                         "provider": "cache", "model": model or "", "cached": True,
                         "similarity": hit["similarity"]}
@@ -148,12 +151,15 @@ def route(messages, model=None, max_tokens=1024, creds=None, on_event=None):
         if r.get("ok"):
             r["provider"] = prov["name"]
             r["model"] = m or ""
+            _usage.record(prov["name"], m or "", True, r.get("latency", 0),
+                          usage=r.get("usage") or {})
             if _sc.cache_enabled() and not _sc.is_stateful(messages):
                 try:
                     _sc.get_cache().store(messages, r.get("text", ""), model_tag=m or "")
                 except Exception:
                     pass
             return r
+        _usage.record(prov["name"], m or "", False, r.get("latency", 0))
         last = r
     return {"ok": False, "error": (last or {}).get("error", "all providers failed")}
 

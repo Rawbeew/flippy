@@ -19,6 +19,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 import flippy_providers  # noqa: E402
 import loomweaver.core as core  # noqa: E402
 
+try:
+    from loomweaver import usage as usage_mod
+except ImportError:
+    usage_mod = None  # degrade gracefully — /usage returns 501
+
 PORT = int(os.environ.get("PORT", "8080"))
 
 _lock = threading.Lock()
@@ -73,6 +78,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if self.path == "/metrics":
                 return self._send(200, render_metrics().encode(), "text/plain; version=0.0.4")
+            if self.path == "/usage" or self.path.startswith("/usage?"):
+                if usage_mod is None:
+                    return self._send(501, {"error": "usage module unavailable"})
+                return self._send(200, usage_mod.render_json(usage_mod.summary()))
             return self._send(404, {"error": "not found"})
         except BrokenPipeError:
             pass
