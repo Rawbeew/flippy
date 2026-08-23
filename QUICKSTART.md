@@ -5,7 +5,7 @@ Get flippy running in 60 seconds.
 ## 1. Clone + set one key
 
 ```bash
-git clone https://github.com/Rawbeew/flippy && cd flippy
+git clone https://github.com/promptcracka/flippy && cd flippy
 export GROQ_KEY=gsk_...   # or OPENROUTER_KEY / FREEINFERENCE_KEY / NVIDIA_KEY
 ```
 

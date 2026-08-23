@@ -3,7 +3,7 @@
 A multi-provider LLM failover router with an agent harness. Stdlib-only core.
 No production traffic yet — this is a well-tested personal tool, not battle-tested infrastructure.
 
-[![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
+[![CI](https://github.com/promptcracka/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/promptcracka/flippy/actions/workflows/ci.yml)
 ![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -33,7 +33,7 @@ If one provider rate-limits you or goes down, the next one picks up mid-request.
 ## Quickstart
 
 ```bash
-git clone https://github.com/Rawbeew/flippy && cd flippy
+git clone https://github.com/promptcracka/flippy && cd flippy
 
 # Set ONE key to start
 export GROQ_KEY=gsk_...

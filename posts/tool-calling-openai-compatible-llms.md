@@ -2,7 +2,7 @@
 title: "Tool calling with OpenAI-compatible LLMs: a complete reference"
 date: 2026-08-18
 tags: [llm, tool-calling, function-calling, openai-compatible, ai]
-canonical: https://github.com/Rawbeew/flippy
+canonical: https://github.com/promptcracka/flippy
 ---
 
 # Tool calling with OpenAI-compatible LLMs: a complete reference
@@ -92,7 +92,7 @@ before calling anything.
 ## A working minimal example
 
 The flippy project ships a 30-line tool-calling demo at the top of
-[`src/aihub.py`](https://github.com/Rawbeew/flippy). Run it with:
+[`src/aihub.py`](https://github.com/promptcracka/flippy). Run it with:
 
 ```bash
 python src/aihub.py --tooltest

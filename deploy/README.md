@@ -48,7 +48,7 @@ low traffic.
 ## (b) Any VPS — Docker Compose
 
 ```bash
-git clone https://github.com/Rawbeew/flippy && cd flippy
+git clone https://github.com/promptcracka/flippy && cd flippy
 cp .env.example .env && nano .env             # paste your keys
 docker compose up -d --build
 curl http://localhost:8080/health

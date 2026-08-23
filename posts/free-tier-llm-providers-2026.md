@@ -2,7 +2,7 @@
 title: "Free-tier LLM providers you can actually use in 2026"
 date: 2026-08-18
 tags: [llm, ai, free-tier, openai-compatible, freeinference, groq, nvidia, cloudflare]
-canonical: https://github.com/Rawbeew/flippy
+canonical: https://github.com/promptcracka/flippy
 ---
 
 # Free-tier LLM providers you can actually use in 2026
@@ -59,8 +59,8 @@ over when one fails. The whole point is that when freeinference 429s you
 during peak, Groq picks it up; when Groq hits its TPM cap, NVIDIA picks it
 up; when NVIDIA is queued, Cloudflare picks it up.
 
-The full working pattern is in [`src/ai_failover.py`](https://github.com/Rawbeew/flippy).
+The full working pattern is in [`src/ai_failover.py`](https://github.com/promptcracka/flippy).
 ~200 lines. Add your API keys as environment variables and you have a
 multi-provider setup that costs $0/month.
 
-See also: [`posts/why-llm-rate-limits-are-an-operational-problem.md`](https://github.com/Rawbeew/flippy/blob/master/posts/why-llm-rate-limits-are-an-operational-problem.md).
+See also: [`posts/why-llm-rate-limits-are-an-operational-problem.md`](https://github.com/promptcracka/flippy/blob/master/posts/why-llm-rate-limits-are-an-operational-problem.md).

@@ -109,7 +109,29 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
     if prov.get("single"):
         text = data.get("result", {}).get("response", "")
     else:
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        try:
+            choices = data.get("choices") or []
+            if not choices:
+                # 200 OK but empty response — treat as provider failure
+                return {"ok": False,
+                        "status": 200,
+                        "retryable": True,
+                        "error": f"200 with empty choices: {json.dumps(data)[:200]}",
+                        "latency": latency}
+            message = choices[0].get("message") or {}
+            text = (message.get("content") or "").strip()
+            if not text:
+                return {"ok": False,
+                        "status": 200,
+                        "retryable": True,
+                        "error": f"200 with empty content: {json.dumps(data)[:200]}",
+                        "latency": latency}
+        except (KeyError, IndexError, TypeError) as e:
+            return {"ok": False,
+                    "status": 200,
+                    "retryable": True,
+                    "error": f"malformed 200 body: {type(e).__name__}: {json.dumps(data)[:200]}",
+                    "latency": latency}
     usage = data.get("usage", {}) or {}
     return {"ok": True, "text": text, "usage": usage, "latency": latency}
 

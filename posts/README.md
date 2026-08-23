@@ -12,4 +12,4 @@ working reference — code you can copy and run.
 | [Vision LLMs: how to send images to OpenAI-compatible APIs](vision-llms-openai-compatible-image-input.md) | Base64 encoding, MIME types, resolution, and per-provider quirks. |
 
 Have a topic you'd like covered? Open an issue on the
-[flippy repository](https://github.com/Rawbeew/flippy).
+[flippy repository](https://github.com/promptcracka/flippy).
