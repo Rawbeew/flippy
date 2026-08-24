@@ -177,7 +177,7 @@ class TestHttpPostJson:
         assert out.startswith("status=200")
         assert '{"ok": true}' in out
         assert captured["url"] == "https://example.com/api"
-        assert captured["ua"] == "OpenAI File Downloader, XaiImageApiFetch/1.0"
+        assert captured["ua"] == "flippy/0.1.0"
         assert json.loads(captured["data"].decode()) == {"hello": "world"}
 
     def test_http_error_returns_status_not_raise(self):

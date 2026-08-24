@@ -114,14 +114,25 @@ from pathlib import Path  # noqa: E402  (used above)
 SHELL_BLOCKED_PATTERNS = [
     r"\beval\b", r"\bcurl\b.*\|\s*(ba)?sh", r"\bwget\b.*\|\s*(ba)?sh",
     r"\bmkfs\b", r":\(\)\{.*\};:",  # fork bomb
-    r"\brm\s+-rf\s+[/~]", r"\bchmod\s+777\s+/",
-    r"\benv\b", r"\bprintenv\b", r"\bset\b\s*$",  # env dumping
+    r"\brm\s+-rf\s+[/~]",
+    r"\bpython\s+-c\b", r"\bpython3\s+-c\b",
+    r"\bbash\s+-c\b", r"\bsh\s+-c\b",
+    r"\bperl\s+-e\b",
+    r"\bopenssl\b",
+    r"\bbase64\b.*\|",
+    r"\bnc\b", r"\bnetcat\b",
+    r"\bfind\b.*-exec",
+    r"\bxargs\b.*(?:ba)?sh",
+    r"\bsudo\b",
+    r"\bchmod\s+777",
+    r"\bgit\s+push.*--force",
+    r"\benv\b", r"\bprintenv\b",
     r"\bcat\b.*\.env", r"\bcat\b.*id_rsa", r"\.ssh/",
-    r"\bscp\b|\bssh\b",  # exfil channels
+    r"\bscp\b|\bssh\b",
     r">\s*/dev/sd[a-z]", r"\bdd\b\s+if=",
 ]
 
-SHELL_ALLOWED_FIRST_WORDS = None  # None = allow all (except blocked); else set of words
+SHELL_ALLOWED_FIRST_WORDS = None
 
 
 def check_shell(cmd):

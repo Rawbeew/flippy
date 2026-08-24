@@ -152,7 +152,9 @@ def _creds_from_env():
 
 
 def main():
-    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    # Bind localhost by default — set HOST=0.0.0.0 to expose (set FLIPPY_AUTH_TOKEN too)
+    BIND_HOST = os.environ.get("HOST", "127.0.0.1")
+    srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
     print(f"flippy serving on :{PORT}", flush=True)
     srv.serve_forever()
 

@@ -28,7 +28,7 @@ except ImportError:
         _kr = None
 
 CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
-UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
+UA = "flippy/0.1.0 (github.com/Rawbeew/flippy)"
 
 
 # ---------------------------------------------------------------- credentials
