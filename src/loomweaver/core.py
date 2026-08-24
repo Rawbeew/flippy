@@ -27,7 +27,13 @@ except ImportError:
     except ImportError:
         _kr = None
 
-CREDS_PATH = os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "hermes", "secrets", "credentials.env")
+CREDS_PATH = os.environ.get(
+    "FLIPPY_CREDS_PATH",
+    os.path.join(
+        os.environ.get("USERPROFILE", os.environ.get("HOME", "")),
+        ".flippy", "credentials.env"
+    )
+)
 UA = "flippy/0.1.0 (github.com/Rawbeew/flippy)"
 
 

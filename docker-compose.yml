@@ -7,5 +7,6 @@ services:
     env_file:
       - .env            # OPENROUTER_KEY=..., GROQ_KEY=... etc (see .env.example)
     environment:
+      - HOST=0.0.0.0
       - PORT=8080
     restart: unless-stopped

@@ -21,7 +21,7 @@ Keys come from environment variables only — never hardcode.
 """
 import os
 
-UA = "OpenAI File Downloader, XaiImageApiFetch/1.0"
+UA = "flippy/0.1.0 (github.com/Rawbeew/flippy)"
 
 
 def split_keys(raw: str) -> list[str]:

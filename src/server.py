@@ -66,6 +66,15 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("FLIPPY_VERBOSE"):
             super().log_message(fmt, *args)
 
+
+    def _authorized(self):
+        """Check FLIPPY_AUTH_TOKEN if set. Returns True if OK."""
+        expected = os.environ.get("FLIPPY_AUTH_TOKEN", "")
+        if not expected:
+            return True  # no token configured = open (localhost bind)
+        got = self.headers.get("Authorization", "")
+        return got == f"Bearer {expected}"
+
     # ------------------------------------------------------------ helpers
     def _send(self, code, payload, ctype="application/json"):
         body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
@@ -77,6 +86,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ routes
     def do_GET(self):
+        if not self._authorized():
+            self._send(401, {"error": "unauthorized: set FLIPPY_AUTH_TOKEN"})
+            return
         try:
             _bump("flippy_http_requests_total")
             if self.path == "/health":
@@ -96,6 +108,9 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def do_POST(self):
+        if not self._authorized():
+            self._send(401, {"error": "unauthorized: set FLIPPY_AUTH_TOKEN"})
+            return
         try:
             if self.path != "/v1/chat/completions":
                 return self._send(404, {"error": "not found"})
