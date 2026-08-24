@@ -2,7 +2,7 @@
 title: "How to survive your first LLM rate limit in production"
 date: 2026-08-18
 tags: [llm, ai, openai, failover, reliability, production]
-canonical: https://github.com/promptcracka/flippy
+canonical: https://github.com/Rawbeew/flippy
 ---
 
 # How to survive your first LLM rate limit in production
@@ -42,7 +42,7 @@ The simplest workable failover router has these properties:
 - Free-tier providers first, paid fallback last (so you don't accidentally
   spend money during a transient outage on a free provider).
 
-That is, very nearly, the entire surface of [`ai_failover.py`](https://github.com/promptcracka/flippy/blob/master/src/ai_failover.py).
+That is, very nearly, the entire surface of [`ai_failover.py`](https://github.com/Rawbeew/flippy/blob/master/src/ai_failover.py).
 ~200 lines of Python. Zero non-stdlib dependencies.
 
 ## The lesson that hurts
@@ -55,5 +55,5 @@ should have been a Saturday's work *before* launch.
 If you're reading this before the launch — spend the Saturday. The code is
 already written for you.
 
-See [`src/ai_failover.py`](https://github.com/promptcracka/flippy) for the
+See [`src/ai_failover.py`](https://github.com/Rawbeew/flippy) for the
 reference implementation.

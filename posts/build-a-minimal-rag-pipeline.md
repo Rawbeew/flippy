@@ -2,7 +2,7 @@
 title: "Build a minimal RAG pipeline in 200 lines of Python"
 date: 2026-08-18
 tags: [rag, embeddings, ai, llm, retrieval-augmented-generation, openai-compatible]
-canonical: https://github.com/promptcracka/flippy
+canonical: https://github.com/Rawbeew/flippy
 ---
 
 # Build a minimal RAG pipeline in 200 lines of Python
@@ -91,5 +91,5 @@ themselves; you have to re-embed when the source changes. A scheduled job
 that watches your source folder is the answer.
 
 The full working pipeline, with persistence, retrieval, and re-embed on
-demand, is in [`src/aihub.py`](https://github.com/promptcracka/flippy) (~400
+demand, is in [`src/aihub.py`](https://github.com/Rawbeew/flippy) (~400
 lines, file-backed vector store, ready to swap for a real DB later).

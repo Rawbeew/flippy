@@ -2,7 +2,7 @@
 title: "Vision LLMs: how to send images to OpenAI-compatible APIs"
 date: 2026-08-18
 tags: [vision, llm, multimodal, openai-compatible, base64, image]
-canonical: https://github.com/promptcracka/flippy
+canonical: https://github.com/Rawbeew/flippy
 ---
 
 # Vision LLMs: how to send images to OpenAI-compatible APIs
@@ -85,7 +85,7 @@ at this image and answer the user's question about it."
 
 ## A working example
 
-The flippy hub has a `vision()` function at [`src/aihub.py`](https://github.com/promptcracka/flippy/blob/master/src/aihub.py):
+The flippy hub has a `vision()` function at [`src/aihub.py`](https://github.com/Rawbeew/flippy/blob/master/src/aihub.py):
 
 ```python
 python src/aihub.py --vision photo.jpg "What is in this image?"
