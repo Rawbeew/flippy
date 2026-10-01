@@ -1,6 +1,7 @@
 """Hardened tool registry for Loomweaver — every model-chosen action is guarded."""
 import json
 import os
+import re
 import subprocess
 import urllib.request
 
@@ -30,20 +31,36 @@ def http_get(url, max_chars=2000):
         return r.read().decode("utf-8", "ignore")[:max_chars]
 
 
-@tool("read_file", "Read a file inside the project (credential paths denied)",
+KEY_REDACT_RE = re.compile(
+    r"(?i)(sk-[a-z0-9_-]{10,}|gsk_[a-z0-9]{20,}|nvapi-[a-z0-9_-]{10,}|"
+    r"cfut_[a-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|"
+    r"AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{20,}|xai-[a-z0-9]{20,})"
+)
+
+
+def redact(text: str) -> str:
+    """Strip anything that looks like a key before it reaches the model."""
+    if not text:
+        return text
+    return KEY_REDACT_RE.sub("[REDACTED]", text)
+
+
+@tool("read_file", "Read a file inside the project (credential paths denied; "
+      "key-like tokens redacted from output)",
       {"path": "str", "max_chars": "int=4000"})
 def read_file(path, max_chars=4000):
     ok, reason = security.check_path(path)
     if not ok:
         return f"blocked: {reason}"
     with open(path, encoding="utf-8", errors="ignore") as f:
-        return f.read(max_chars)
+        return redact(f.read(max_chars))
 
 
-@tool("write_file", "Write a file inside the project (credential paths denied)",
+@tool("write_file", "Write a file inside the project (guard code, cron jobs, CI, "
+      "state dirs are read-only; credential paths denied)",
       {"path": "str", "content": "str"})
 def write_file(path, content):
-    ok, reason = security.check_path(path)
+    ok, reason = security.check_write_path(path)
     if not ok:
         return f"blocked: {reason}"
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -61,7 +78,8 @@ def list_dir(path="."):
 
 
 @tool("shell", "Run a shell command (sandboxed env; dangerous patterns blocked; "
-      "LOOMWEAVER_SAFE_MODE=1 disables)", {"cmd": "str", "timeout": "int=60"})
+      "timeout clamped to 60s; LOOMWEAVER_SAFE_MODE=1 disables)",
+      {"cmd": "str", "timeout": "int=60"})
 def shell(cmd, timeout=60):
     if SAFE_MODE:
         return "blocked: safe mode enabled (shell disabled)"
@@ -69,14 +87,14 @@ def shell(cmd, timeout=60):
     if not ok:
         return f"blocked: {reason}"
     try:
+        # audit run-001 N4: model-controlled timeout is clamped server-side
+        timeout = max(1, min(int(timeout or 60), 60))
         r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
                            timeout=timeout, env=security.sanitized_env())
     except subprocess.TimeoutExpired:
         return f"timeout after {timeout}s"
     out = (r.stdout + r.stderr).strip()
-    # strip anything that looks like a key from output before it reaches the model
-    out = re.sub(r"(?i)(sk-[a-z0-9_-]{10,}|gsk_[a-z0-9]{20,}|nvapi-[a-z0-9_-]{10,}|"
-                 r"cfut_[a-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,})", "[REDACTED]", out)
+    out = redact(out)  # audit run-001 C3: same redaction as read_file
     return f"exit={r.returncode}\n{out[:3000]}"
 
 
@@ -88,8 +106,7 @@ def remember(key, value, sess=None):
     return "no session bound"
 
 
-import re  # noqa: E402
-import sqlite3  # noqa: E402
+import sqlite3  # noqa: E402  (used by sql_query; re already imported at top)
 
 # ------------------------------------------------------------- sql_query
 
@@ -127,8 +144,8 @@ def sql_query(db_path, query, max_rows=50):
     except sqlite3.Error as e:
         return f"sql error: {e}"
     body = [dict(zip(cols, r)) for r in rows[:max_rows]]
-    return json.dumps({"columns": cols, "rows": body,
-                       "truncated": bool(more)}, default=str)
+    return redact(json.dumps({"columns": cols, "rows": body,
+                              "truncated": bool(more)}, default=str))
 
 
 # --------------------------------------------------------- json_transform
@@ -136,14 +153,17 @@ def sql_query(db_path, query, max_rows=50):
 @tool("json_transform", "Load a JSON file inside the project, apply a filter/"
       "map spec, and write the result to another project path. Spec keys: "
       "'where' ({field: value} equality filter), 'keys' (keep only these "
-      "fields), 'limit' (max items). Operates on the top-level list.",
+      "fields), 'limit' (max items). Operates on the top-level list. "
+      "Write destination is subject to the write deny-set.",
       {"src_path": "str", "out_path": "str", "spec": "dict={}"})
 def json_transform(src_path, out_path, spec=None):
     spec = spec or {}
-    for p in (src_path, out_path):
-        ok, reason = security.check_path(p)
-        if not ok:
-            return f"blocked: {reason} ({p})"
+    ok, reason = security.check_path(src_path)
+    if not ok:
+        return f"blocked: {reason} ({src_path})"
+    ok, reason = security.check_write_path(out_path)
+    if not ok:
+        return f"blocked: {reason} ({out_path})"
     try:
         with open(src_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -206,6 +226,11 @@ def schema_for(name):
 
 
 def dispatch(name, args, sess=None):
+    # audit run-001 C6: args must be a dict before any tool sees it; the
+    # remember special-case previously sat outside the try/except and crashed
+    # the whole agent run on {"tool": "remember", "args": null}
+    if not isinstance(args, dict):
+        return f"tool error: args must be an object, got {type(args).__name__}"
     if name == "remember":
         return remember(args.get("key"), args.get("value"), sess=sess)
     if name not in TOOLS:

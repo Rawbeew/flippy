@@ -1,0 +1,18 @@
+{
+  "run_notes": "flippy audit run-001. Sandbox unavailable: no target-controlled execution; execution-needing verifications go to needs_validation. Source ref: master 08dcf99.",
+  "prior_runs": [],
+  "units": [
+    {"id": "U1-agent-parse", "surface": "agent.py model-output parsing", "boundary": "model->agent", "attack_classes": ["prompt injection via tool args", "protocol confusion"], "hunters": ["sa-0"], "status": "planned"},
+    {"id": "U2-dispatch", "surface": "tools.dispatch argument handling", "boundary": "agent->tool", "attack_classes": ["type confusion", "registry abuse"], "hunters": ["sa-0"], "status": "planned"},
+    {"id": "U3-path-jail", "surface": "security.check_path + file tools", "boundary": "tool->fs", "attack_classes": ["path traversal", "symlink escape", "Windows path quirks", "TOCTOU"], "hunters": ["sa-1"], "status": "planned"},
+    {"id": "U5-shell-guard", "surface": "security.check_shell + shell + sanitized_env", "boundary": "tool->shell", "attack_classes": ["blocklist bypass", "env leakage", "write-then-exec chaining"], "hunters": ["sa-1"], "status": "planned"},
+    {"id": "U6-sql", "surface": "sql_query read-only enforcement", "boundary": "tool->db", "attack_classes": ["write smuggling", "ATTACH bypass"], "hunters": ["sa-1"], "status": "planned"},
+    {"id": "U7-http-server", "surface": "server.py request handling", "boundary": "http->server", "attack_classes": ["auth bypass", "DoS size", "response injection", "info leak"], "hunters": ["sa-2"], "status": "planned"},
+    {"id": "U12-sse", "surface": "stream.py SSE parsing", "boundary": "provider->server", "attack_classes": ["malformed stream", "huge line", "injection into downstream"], "hunters": ["sa-2"], "status": "planned"},
+    {"id": "U8-cron", "surface": "cron.py job file -> subprocess", "boundary": "file->process", "attack_classes": ["allowlist bypass", "arg injection"], "hunters": ["sa-3"], "status": "planned"},
+    {"id": "U9-secrets", "surface": "core/key_rotation creds handling", "boundary": "process->keys", "attack_classes": ["secret persistence", "log leakage"], "hunters": ["sa-3"], "status": "planned"},
+    {"id": "U10-sqlite-state", "surface": "quota_ledger/usage/semantic_cache", "boundary": "state files", "attack_classes": ["race conditions", "corruption", "cross-session leak"], "hunters": ["sa-3"], "status": "planned"},
+    {"id": "U11-armada-roles", "surface": "armada.py role tool enforcement", "boundary": "fleet->tools", "attack_classes": ["role bypass"], "hunters": ["sa-0"], "status": "planned"},
+    {"id": "U4-url-guard", "surface": "security.check_url + http tools", "boundary": "tool->net", "attack_classes": ["SSRF", "DNS rebinding", "scheme abuse"], "hunters": [], "status": "covered_by_tests", "note": "test_security.py covers metadata/localhost/private-IP; DNS re-check in source; spot-check only if time permits"}
+  ]
+}

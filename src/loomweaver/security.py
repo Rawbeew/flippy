@@ -108,6 +108,46 @@ def check_path(path):
     return True, ""
 
 
+# ---------------------------------------------------------------------------
+# Write deny-set: guard code, cron persistence, state dirs (audit run-001 C1).
+# The jail must not let a model rewrite the code that enforces the jail.
+# ---------------------------------------------------------------------------
+
+WRITE_DENY = [
+    ("src" + os.sep, "guard/source tree"),
+    ("tests" + os.sep, "test suite"),
+    ("cron_jobs.json", "cron persistence file"),
+    (".github" + os.sep, "CI workflows"),
+    ("sessions" + os.sep, "session state"),
+    ("runs" + os.sep, "run logs/state"),
+    ("pyproject.toml", "project config"),
+    ("requirements.txt", "dependency pinning"),
+    ("Dockerfile", "container build"),
+    ("docker-compose.yml", "container build"),
+]
+
+
+def check_write_path(path: str):
+    """Write-jail: same rules as check_path, plus the write deny-set.
+
+    Agent tool writes are restricted to sandbox/, extracted/, and the repo
+    root for data files; guard code, cron jobs, CI, session/run state, and
+    build config are read-only to the agent.
+    """
+    ok, reason = check_path(path)
+    if not ok:
+        return ok, reason
+    p = os.path.realpath(path)
+    rel = os.path.relpath(p, PROJECT_ROOT)
+    # normalize separators for the deny check
+    rel_norm = rel.replace("\\", "/") if os.sep == "\\" else rel
+    for name, what in WRITE_DENY:
+        marker = name.replace("\\", "/")
+        if rel_norm == marker.rstrip("/") or rel_norm.startswith(marker):
+            return False, f"write denied: {what} is read-only to the agent"
+    return True, ""
+
+
 from pathlib import Path  # noqa: E402  (used above)
 
 
@@ -130,6 +170,22 @@ SHELL_BLOCKED_PATTERNS = [
     r"\bcat\b.*\.env", r"\bcat\b.*id_rsa", r"\.ssh/",
     r"\bscp\b|\bssh\b",
     r">\s*/dev/sd[a-z]", r"\bdd\b\s+if=",
+    # audit run-001 C2: interpreter-invocation by name (not just -c/-e flags)
+    r"\bnode\s+(-e|--eval)\b", r"\bdeno\b", r"\bphp\s+(-r|-a)\b", r"\bruby\s+(-e|--eval)\b",
+    r"\bgrep\s+-P\b", r"\blua\b", r"\brscript\b",
+    r"\bpowershell(\.exe)?\b", r"\bpwsh\b", r"\bcertutil\b", r"\bbitsadmin\b",
+    r"\bcscript\b", r"\bwscript\b", r"\brundll32\b", r"\bmshta\b", r"\bregsvr32\b",
+    r"\bmsiexec\b", r"\binstallutil\b",
+    # pipe/heredoc feeding an interpreter (echo ... | python, cmd <<EOF)
+    r"\|\s*(python|python3|node|php|ruby|perl|lua)\b",
+    r"<<\s*'?\w*'?\s*$",
+    # in-band exec: awk system(), sed e-command, ex/vim bang, make/tar shims
+    r"\bawk\b.*\bsystem\s*\(", r"\bsed\b.*\be\s", r"\bex\s+-c\b", r"\bvim\b.*-c\s+!",
+    r"\bmake\b.*-f\s*<\(", r"\btar\b.*--to-command",
+    # audit run-001 C3: credential-copy exfil staging (cp/tar/cat of credential-ish paths)
+    r"\b(cp|mv|tar|rsync)\b.*(\.env|credential|\.flippy|\.aws|\.netrc|id_rsa|\.ssh)",
+    r"\bgit\s+config\s+alias\.",
+    r"\bgit\s+push\s+(https?|git@)(?!.*github\.com)",
 ]
 
 SHELL_ALLOWED_FIRST_WORDS = None

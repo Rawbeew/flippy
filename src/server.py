@@ -9,6 +9,7 @@ Run: python src/server.py            (PORT env var, default 8080)
 No third-party dependencies.
 """
 import json
+import hmac
 import os
 import sys
 import threading
@@ -73,7 +74,8 @@ class Handler(BaseHTTPRequestHandler):
         if not expected:
             return True  # no token configured = open (localhost bind)
         got = self.headers.get("Authorization", "")
-        return got == f"Bearer {expected}"
+        # audit run-001 C4: constant-time compare (== leaks a timing oracle)
+        return hmac.compare_digest(got.encode(), f"Bearer {expected}".encode())
 
     # ------------------------------------------------------------ helpers
     def _send(self, code, payload, ctype="application/json"):
@@ -169,6 +171,14 @@ def _creds_from_env():
 def main():
     # Bind localhost by default — set HOST=0.0.0.0 to expose (set FLIPPY_AUTH_TOKEN too)
     BIND_HOST = os.environ.get("HOST", "127.0.0.1")
+    # audit run-001 C5: refuse an exposed bind without an auth token — an
+    # open non-loopback server is an unauthenticated LLM proxy on your keys
+    if BIND_HOST not in ("127.0.0.1", "localhost", "::1") and not os.environ.get("FLIPPY_AUTH_TOKEN"):
+        sys.stderr.write(
+            "refusing to bind %s without FLIPPY_AUTH_TOKEN: this would expose an "
+            "open LLM proxy on your provider keys. Set FLIPPY_AUTH_TOKEN or bind "
+            "loopback.\n" % BIND_HOST)
+        sys.exit(2)
     srv = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
     print(f"flippy serving on :{PORT}", flush=True)
     srv.serve_forever()
