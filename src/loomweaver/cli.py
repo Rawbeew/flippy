@@ -21,7 +21,7 @@ def main(argv=None):
     # eval
     p = sub.add_parser("eval", help="run an eval suite")
     p.add_argument("--suite", default="basic",
-                   choices=["basic", "reasoning", "extraction", "tools"])
+                   choices=["basic", "reasoning", "extraction", "tools", "agent"])
     p.add_argument("--model")
 
     # eval-compare
@@ -69,7 +69,10 @@ def main(argv=None):
                         max_steps=args.max_steps)
         print(json.dumps({"result": out["result"], "run_dir": out["run_dir"]}, indent=2))
     elif args.cmd == "eval":
-        print(json.dumps(evals.run_suite(args.suite, model=args.model), indent=2))
+        if args.suite == "agent":
+            print(json.dumps(evals.run_agent_suite(model=args.model), indent=2))
+        else:
+            print(json.dumps(evals.run_suite(args.suite, model=args.model), indent=2))
     elif args.cmd == "eval-compare":
         print(json.dumps(evals.compare(), indent=2))
     elif args.cmd == "loadtest":

@@ -37,4 +37,16 @@ def _fresh_quota_ledger(tmp_path):
         yield led
 
 
+@pytest.fixture(autouse=True)
+def _fresh_router_policy(monkeypatch):
+    """Isolate adaptive-routing state per test — one test's provider
+    failures/cooldowns must not reorder providers for the next test.
+    Also keeps retry backoffs instant so retry tests stay fast."""
+    from loomweaver import core, router_policy as rp
+    monkeypatch.setenv("LOOMWEAVER_RETRY_BASE_S", "0.001")
+    fresh = rp.RouterPolicy()
+    with mock.patch.object(core._rp, "get_policy", return_value=fresh):
+        yield fresh
+
+
 import unittest.mock as mock  # noqa: E402  (used by fixture above)

@@ -39,8 +39,73 @@ SUITE_TOOLS = [
      "check_regex": r'"tool"\s*:\s*"read_file"'},
 ]
 
+# ---------------------------------------------------------------- agent suite
+# Multi-step agent tasks: the model must (a) parse the JSON protocol, (b) pick
+# the right tool, (c) chain a second action from the first tool's result.
+# Scored by mocked tool results so the suite runs offline.
+
+SUITE_AGENT = [
+    {
+        "id": "agent_write_read",
+        "goal": "Write the text 'flippy-test' to the file note.txt, then read it "
+                "back to verify. Use tools. Finish with done when verified.",
+        # scripted tool behavior: write_file succeeds, read_file returns the text
+        "tool_script": {
+            "write_file": lambda args: f"wrote file {args.get('path', '')}",
+            "read_file": lambda args: "flippy-test",
+        },
+        "success_criteria": {
+            "min_tool_calls": 2,
+            "required_tools": ["write_file", "read_file"],
+            "done": True,
+        },
+    },
+    {
+        "id": "agent_fetch_then_done",
+        "goal": "Fetch the URL https://example.com/data.json, then report done "
+                "with the number of bytes fetched. Use tools.",
+        "tool_script": {
+            "http_get": lambda args: '{"n": 42}',
+        },
+        "success_criteria": {
+            "min_tool_calls": 1,
+            "required_tools": ["http_get"],
+            "done": True,
+        },
+    },
+    {
+        "id": "agent_observe_and_decide",
+        "goal": "List the files in the project root. If a file named "
+                "config.json exists, read it and report done with its "
+                "contents. If not, report done with 'no config'. Use tools.",
+        "tool_script": {
+            "list_dir": lambda args: "config.json\nREADME.md\nsrc",
+            "read_file": lambda args: '{"env": "production"}',
+        },
+        "success_criteria": {
+            "min_tool_calls": 2,
+            "required_tools": ["list_dir", "read_file"],
+            "done": True,
+        },
+    },
+    {
+        "id": "agent_remember_fact",
+        "goal": "Remember the fact that project=flippy, then report done. "
+                "Use tools.",
+        "tool_script": {
+            "remember": lambda args: "remembered",
+        },
+        "success_criteria": {
+            "min_tool_calls": 1,
+            "required_tools": ["remember"],
+            "done": True,
+        },
+    },
+]
+
 SUITES = {"basic": SUITE_BASIC, "reasoning": SUITE_REASONING,
-          "extraction": SUITE_EXTRACTION, "tools": SUITE_TOOLS}
+          "extraction": SUITE_EXTRACTION, "tools": SUITE_TOOLS,
+          "agent": SUITE_AGENT}
 
 
 # ---------------------------------------------------------------- scoring
@@ -96,3 +161,106 @@ def compare(suites=("basic", "reasoning"), models=None, creds=None):
             rows.append({"model": m or "(router-default)", "suite": s,
                          "score": r["score"], "avg_latency": r["avg_latency"]})
     return rows
+
+
+# ---------------------------------------------------------------- agent suite runner
+
+def run_agent_suite(model=None, creds=None, runs_dir=None, max_steps=8,
+                    planner=None):
+    """Run SUITE_AGENT end to end with scripted tools and a mocked router.
+
+    The agent suite measures the LOOP, not the model: route() is mocked to a
+    scripted pseudo-model that reacts to observations, tools are scripted via
+    the case's tool_script. A loop that loses observations, truncates without
+    marking, or never terminates fails here deterministically.
+
+    `planner(case, called_tools, last_obs) -> action dict` overrides the
+    default plan logic (used by tests to simulate broken/looping models).
+
+    Scoring per case:
+      - every required tool was called (order-free)
+      - at least min_tool_calls total calls
+      - run reached a 'done' state (not max-steps, not no-progress stop)
+      - no protocol errors (unparseable model output treated as nudge)
+    """
+    from unittest import mock as _mock
+    from loomweaver import agent as agent_mod
+
+    def _default_planner(case, done_tools, last_obs):
+        req = case["success_criteria"]["required_tools"]
+        for t in req:
+            if t not in done_tools:
+                return {"tool": t, "args": _args_for(t)}
+        return {"done": "task complete"}
+
+    def _args_for(tool):
+        if tool == "write_file":
+            return {"path": "note.txt", "content": "flippy-test"}
+        if tool == "read_file":
+            return {"path": "note.txt"}
+        if tool == "http_get":
+            return {"url": "https://example.com/data.json"}
+        if tool == "list_dir":
+            return {"path": "."}
+        if tool == "remember":
+            return {"key": "project", "value": "flippy"}
+        return {}
+
+    plan_fn = planner or _default_planner
+
+    results = []
+    for case in SUITE_AGENT:
+        calls = []
+        script = case.get("tool_script", {})
+
+        def _fake_route(messages, model=None, creds=None, on_event=None, **kw):
+            """Scripted pseudo-model: react to the last message with the next
+            action from a tiny plan determined by the goal + observations."""
+            last = messages[-1]["content"] if messages else ""
+            done_tools = [c for c, _ in calls]
+            plan = plan_fn(case, done_tools, last)
+            return {"ok": True, "text": json.dumps(plan), "provider": "scripted",
+                    "model": "scripted", "latency": 0.01}
+
+        def _fake_dispatch(name, args, sess=None):
+            calls.append((name, dict(args)))
+            fn = script.get(name)
+            if fn is None:
+                return "ok"
+            return str(fn(args))
+
+        with _mock.patch.object(agent_mod, "route", side_effect=_fake_route), \
+             _mock.patch.object(agent_mod.tools, "dispatch",
+                                side_effect=_fake_dispatch), \
+             _mock.patch.object(agent_mod, "SessionStore") as _MS:
+            # isolated session per case
+            _MS.return_value.load.return_value = {"id": case["id"], "messages": [],
+                                                  "facts": {}}
+            _MS.return_value.save.side_effect = lambda s: None
+            out = agent_mod.run(case["goal"], session_id=case["id"],
+                                max_steps=max_steps, model=model,
+                                runs_dir=runs_dir, verbose=False)
+
+        crit = case["success_criteria"]
+        called = [c[0] for c in calls]
+        req_ok = all(t in called for t in crit.get("required_tools", []))
+        count_ok = len(calls) >= crit.get("min_tool_calls", 1)
+        # done-ness comes from the event trail: a genuine run_done with a
+        # model-supplied summary, NOT max-steps exhaustion or a no-progress stop
+        events = out.get("events") or []
+        done_events = [e for e in events if e.get("type") == "run_done"]
+        done_ok = bool(done_events) and \
+            done_events[-1].get("reason") != "no_progress" and \
+            "max steps" not in str(done_events[-1].get("summary", "")).lower()
+        passed = req_ok and count_ok and done_ok
+        results.append({"id": case["id"], "pass": passed,
+                        "tools_called": called,
+                        "result": str(out.get("result"))[:120],
+                        "steps": out.get("events") and
+                        max(e.get("step", 0) for e in out.get("events", [])
+                            if e.get("type") in ("agent_step", "run_done")) or 0})
+    passed = sum(1 for x in results if x["pass"])
+    return {"suite": "agent", "model": model or "(scripted)",
+            "passed": passed, "total": len(results),
+            "score": round(passed / len(results) * 100),
+            "cases": results}

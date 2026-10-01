@@ -4,7 +4,7 @@ A multi-provider LLM failover router with an agent harness. Stdlib-only core.
 No production traffic yet — this is a well-tested personal tool, not battle-tested infrastructure.
 
 [![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-147%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-173%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -15,13 +15,16 @@ If one provider rate-limits you or goes down, the next one picks up mid-request.
 
 **Verified capabilities:**
 - Failover across OpenRouter, freeinference.org, Groq, NVIDIA NIM, Cloudflare Workers AI
+- **Adaptive provider ordering** — providers scored by EWMA success/latency; a failing provider sinks, a fast healthy one rises (registry order is the cold-start tie-break)
+- **In-provider retry with backoff** — transient 5xx recovers on the same provider before failover; 429s never retried in-provider (quota ledger owns them)
 - Semantic response cache (TF-IDF cosine, stdlib-only) — near-duplicate prompts hit cache
 - Per-provider quota tracking — skips exhausted providers before the 429
 - Multi-key rotation per provider — comma-separated env vars
 - Usage dashboard — per-provider calls/errors/latency/tokens + cache savings (`usage` CLI, `/usage` endpoint)
 - Quota status endpoint — live per-provider free-tier headroom (`quota` CLI, `/quota` endpoint)
 - Agent loop with role-based tool restrictions (scout/builder/verifier/reporter)
-- 147 unit tests including failure injection (mocked 429s, timeouts, malformed responses)
+- **Agent benchmark suite** (`eval --suite agent`) — multi-step tasks scored on tool-call chains + genuine completion; deterministically detects looping/never-done models
+- 173 unit tests including failure injection (mocked 429s, timeouts, malformed responses)
 
 **Not verified / honest limitations:**
 - Zero external users. No production traffic has hit this code.
@@ -65,9 +68,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow, module map,
 scaling points, and trade-offs table.
 
 ```
-Request → cache check → quota check → key rotation → provider call → usage record
-                                                                        ↓
-                                                              failover on failure
+Request → cache check → adaptive ordering → quota check → key rotation
+        → provider call (≤3 attempts w/ backoff on 5xx) → usage record
+                                                        ↓
+                                              failover on failure
 ```
 
 ## Modules
@@ -78,7 +82,7 @@ Request → cache check → quota check → key rotation → provider call → u
 | `src/ai_failover.py` | Standalone CLI router |
 | `src/aihub.py` | litellm-powered multimodal hub (optional: vision, RAG, TTS, STT) |
 | `src/server.py` | stdlib HTTP server: /v1/chat, /health, /metrics, /usage, /quota |
-| `src/loomweaver/` | Agent harness: routing core, agent loop, armada fleet, evals, security |
+| `src/loomweaver/` | Agent harness: routing core, adaptive router policy, agent loop, armada fleet, evals, security |
 
 ## Security
 

@@ -12,12 +12,14 @@ try:
     from . import quota_ledger as _ql
     from . import semantic_cache as _sc
     from . import usage as _usage
+    from . import router_policy as _rp
 except ImportError:  # running as a top-level package: add src/ to path and retry
     import sys as _sys
     _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from loomweaver import quota_ledger as _ql
     from loomweaver import semantic_cache as _sc
     from loomweaver import usage as _usage
+    from loomweaver import router_policy as _rp
 
 try:  # key rotation is additive — other armada agents' modules must not break us
     from . import key_rotation as _kr
@@ -193,14 +195,25 @@ def chat_with_rotation(prov: dict, messages: list[dict], model: str | None = Non
 
 def route(messages: list[dict], model: str | None = None,
           max_tokens: int = 1024, creds: dict[str, str] | None = None,
-          on_event: callable | None = None) -> dict:
+          on_event: callable | None = None, timeout_budget_s: float | None = None,
+          max_provider_attempts: int = 3) -> dict:
     """Failover across all providers; returns first ok result + which provider won.
 
     Model pinning:
       - 'provider/model' → only that provider is tried, with 'model' stripped of the prefix
       - bare model name  → only providers whose models list contains it are tried
       - None             → each provider's default model
+
+    Production routing (router_policy):
+      - adaptive provider order: EWMA success/latency score, cooldown hysteresis
+      - in-provider retry with exponential backoff + jitter for retryable errors
+      - optional deadline (timeout_budget_s): stop trying more providers when
+        the budget is spent and return the best error we have
+      - every provider attempt is emitted as an event (attempt number, status)
     """
+    deadline = (time.time() + timeout_budget_s) if timeout_budget_s else None
+    retry = _rp.RetryPolicy(max_attempts=max_provider_attempts)
+    policy = _rp.get_policy()
     last = None
     ledger = _ql.get_ledger()
     # --- semantic response cache: exact hash fast path, similarity fallback ---
@@ -217,7 +230,8 @@ def route(messages: list[dict], model: str | None = None,
                         "similarity": hit["similarity"]}
         except Exception:
             pass  # cache must never break routing
-    for prov in build_providers(creds or load_creds()):
+    providers = build_providers(creds or load_creds())
+    for prov in policy.order(providers):
         m = None
         if model:
             if any(model == x for x in prov["models"]):
@@ -230,27 +244,59 @@ def route(messages: list[dict], model: str | None = None,
         if not allowed:
             if on_event:
                 on_event({"type": "quota_skip", "provider": prov["name"], "reason": reason})
+            # propagate ledger cooldowns into the adaptive policy
+            try:
+                policy.note_dead(prov["name"], _rp.cooldown_seconds_from_reason(reason))
+            except Exception:
+                pass
             continue  # route away before hitting the 429
         ledger.record_request(prov["name"])
-        r = chat_with_rotation(prov, messages, model=m, max_tokens=max_tokens,
-                               on_event=on_event)
-        ledger.record_result(prov["name"], r.get("status") if not r.get("ok") else 200)
-        if on_event:
-            on_event({"type": "llm_call", "provider": prov["name"], "model": m,
-                      "ok": r.get("ok"), "latency": round(r.get("latency", 0), 3)})
-        if r.get("ok"):
-            r["provider"] = prov["name"]
-            r["model"] = m or ""
-            _usage.record(prov["name"], m or "", True, r.get("latency", 0),
-                          usage=r.get("usage") or {})
-            if _sc.cache_enabled() and not _sc.is_stateful(messages):
-                try:
-                    _sc.get_cache().store(messages, r.get("text", ""), model_tag=m or "")
-                except Exception:
-                    pass
-            return r
-        _usage.record(prov["name"], m or "", False, r.get("latency", 0))
-        last = r
+        attempt = 0
+        while True:
+            attempt += 1
+            r = chat_with_rotation(prov, messages, model=m, max_tokens=max_tokens,
+                                   on_event=on_event)
+            ledger.record_result(prov["name"], r.get("status") if not r.get("ok") else 200)
+            cooldown = policy.note_result(prov["name"], bool(r.get("ok")),
+                                           r.get("latency", 0.0))
+            if on_event:
+                on_event({"type": "llm_call", "provider": prov["name"], "model": m,
+                          "ok": r.get("ok"), "latency": round(r.get("latency", 0), 3),
+                          "attempt": attempt,
+                          "status": 200 if r.get("ok") else r.get("status")})
+            if r.get("ok"):
+                r["provider"] = prov["name"]
+                r["model"] = m or ""
+                r["attempts"] = attempt
+                _usage.record(prov["name"], m or "", True, r.get("latency", 0),
+                              usage=r.get("usage") or {})
+                if _sc.cache_enabled() and not _sc.is_stateful(messages):
+                    try:
+                        _sc.get_cache().store(messages, r.get("text", ""), model_tag=m or "")
+                    except Exception:
+                        pass
+                return r
+            _usage.record(prov["name"], m or "", False, r.get("latency", 0))
+            last = r
+            # in-provider retry for transient failures (429 bursts, 5xx, timeouts)
+            retry_after = None
+            try:
+                retry_after = _kr.parse_retry_after(r) if _kr else None
+            except Exception:
+                retry_after = None
+            if not retry.should_retry(attempt, bool(r.get("retryable")), deadline,
+                                      status=r.get("status")):
+                break
+            backoff = retry.backoff_s(attempt, retry_after)
+            if on_event:
+                on_event({"type": "retry_wait", "provider": prov["name"],
+                          "attempt": attempt, "backoff_s": round(backoff, 2)})
+            # honor the deadline even while backing off
+            if deadline is not None and time.time() + backoff >= deadline:
+                break
+            time.sleep(backoff)
+        if deadline is not None and time.time() >= deadline:
+            break  # budget spent — stop walking providers
     return {"ok": False, "error": (last or {}).get("error", "all providers failed")}
 
 

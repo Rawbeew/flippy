@@ -4,7 +4,6 @@ Tool-calling via native OpenAI-style tool_calls when the provider supports it,
 falling back to a JSON-protocol prompt when it doesn't. Every step emits events.
 """
 import json
-import re
 
 from . import tools
 from .core import RunLog, SessionStore, route
@@ -16,23 +15,79 @@ Rules:
 - Never invent tool results."""
 
 
+def _balanced_spans(text):
+    """Yield outermost {...} spans, skipping braces inside quoted strings.
+
+    A plain brace-depth count misreads `{"content": "}"}` as closing early,
+    because it counts braces that sit inside JSON string values. This scanner
+    tracks string state and backslash escapes, so only structural braces
+    count. Unbalanced input yields nothing.
+    """
+    n = len(text)
+    i = 0
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_str = False
+        j = i
+        while j < n:
+            ch = text[j]
+            if in_str:
+                if ch == "\\":
+                    j += 2  # escaped char inside a string — never structural
+                    continue
+                if ch == '"':
+                    in_str = False
+            else:
+                if ch == '"':
+                    in_str = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        yield text[i:j + 1]
+                        i = j + 1
+                        break
+            j += 1
+        else:
+            return  # ran off the end without closing — no more spans
+
+
 def _parse_json_action(text):
-    """Fallback protocol: model returns {"tool": name, "args": {...}} or {"done": "..."}."""
-    m = re.search(r"\{.*\}", text, re.S)
-    if not m:
-        return None
-    try:
-        d = json.loads(m.group(0))
-        if "tool" in d:
-            return ("tool", d["tool"], d.get("args", {}))
-        if "done" in d:
-            return ("done", d["done"], None)
-    except Exception:
-        pass
+    """Fallback protocol: model returns {"tool": name, "args": {...}} or {"done": "..."}.
+
+    Hardened against how free-tier models actually emit actions: wrapped in
+    prose, inside markdown fences, with brace-containing string values, or
+    with stray braces in surrounding commentary. The old greedy regex
+    (`\\{.*\\}`) failed on the last two; a string-aware balanced-span scan
+    recovers them. Spans are tried in order; the first that parses as a
+    dict with a "tool" or "done" key wins.
+    """
+    text = text or ""
+    # strip markdown code fences that free-tier models love to add
+    for fence in ("```json", "```"):
+        if fence in text:
+            text = text.replace(fence, "")
+    for span in _balanced_spans(text):
+        try:
+            d = json.loads(span)
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            if "tool" in d:
+                return ("tool", d["tool"], d.get("args", {}))
+            if "done" in d:
+                return ("done", d["done"], None)
     return None
 
 
 MAX_SESSION_MESSAGES = 40  # keep context bounded; oldest non-system messages dropped
+
+OBS_TRUNC = 2000  # chars of tool output fed back to the model (budgeted)
+NUDGE_MAX = 2     # consecutive no-progress nudges before we stop the run
 
 
 def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=None, verbose=True):
@@ -53,6 +108,7 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
     runlog.emit({"type": "run_start", "goal": goal, "session": sess["id"], "model": model})
 
     final = None
+    nudges = 0  # consecutive steps with no tool call and no done — loop detection
     for step in range(1, max_steps + 1):
         r = route(sess["messages"], model=model, creds=creds,
                   on_event=lambda e: runlog.emit(e))
@@ -77,16 +133,27 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         if action and action[0] == "tool":
             _, name, args = action
             obs = tools.dispatch(name, args, sess=sess)
+            # budgeted observation: cap what re-enters context, mark truncation
+            if len(obs) > OBS_TRUNC:
+                obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"
             sess["messages"].append({"role": "user",
-                                     "content": f"TOOL_RESULT {name}: {str(obs)[:1500]}"})
+                                     "content": f"TOOL_RESULT {name}: {obs}"})
             runlog.emit({"type": "tool_call", "step": step, "tool": name,
                          "args": args, "result": str(obs)[:300]})
+            nudges = 0  # a tool call is progress
             continue
 
-        # no explicit action: if text mentions DONE treat as done, else nudge once
+        # no explicit action: if text mentions DONE treat as done, else nudge
         if "DONE:" in r["text"]:
             final = r["text"].split("DONE:", 1)[1].strip()
             runlog.emit({"type": "run_done", "step": step, "summary": final})
+            break
+        nudges += 1
+        if nudges > NUDGE_MAX:
+            final = ("stopped: model produced no actionable step after "
+                     f"{NUDGE_MAX} nudges")
+            runlog.emit({"type": "run_done", "step": step, "summary": final,
+                         "reason": "no_progress"})
             break
         sess["messages"].append({"role": "user", "content":
             'Continue. Use {"tool": "...", "args": {...}} to act, or {"done": "..."} when finished.'})

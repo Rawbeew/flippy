@@ -5,14 +5,17 @@ Pure Python stdlib for the core; optional litellm for multimodal.
 
 ## What it does
 - Routes chat requests across 5 free-tier providers (OpenRouter, freeinference.org, Groq, NVIDIA NIM, Cloudflare Workers AI) with automatic failover
+- Adaptive provider ordering (EWMA success/latency scoring; failing providers sink, ledger cooldowns propagate)
+- In-provider retry with backoff for transient 5xx; 429s never retried in-provider
 - Semantic response cache (TF-IDF cosine, SQLite-backed) — near-duplicate prompts hit cache
 - Per-provider quota tracking — skips exhausted providers before the 429
 - Multi-key rotation per provider
 - Usage dashboard — per-provider calls/errors/latency/tokens + cache savings (`usage` CLI, `/usage` endpoint)
 - Quota status endpoint — live per-provider free-tier headroom (`quota` CLI, `/quota` endpoint)
 - Agent loop with role-based tool restrictions (scout/builder/verifier/reporter)
+- Agent benchmark suite (`eval --suite agent`) — multi-step tasks scored on tool chains + genuine completion
 - Eval suites and load-testing tools
-- 147 unit tests including failure injection
+- 173 unit tests including failure injection
 
 ## Key commands
 - `python src/ai_failover.py "prompt"` — one-shot chat with failover

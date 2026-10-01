@@ -75,7 +75,9 @@ class TestProviderFailures:
         }
         r, calls = self._run_with_chat_side_effects(effects)
         assert r["ok"] and r["provider"] == "prov_last"
-        assert len(calls) == 3
+        # router_policy: retryable 5xx gets in-provider retries (max 3 attempts)
+        # 3 (prov_fast) + 3 (prov_slow) + 1 (prov_last) = 7, order preserved
+        assert calls == ["prov_fast"] * 3 + ["prov_slow"] * 3 + ["prov_last"]
 
     def test_401_auth_error_still_tries_next(self):
         """Auth revoked on one provider doesn't block others."""
