@@ -88,7 +88,10 @@ def daemon(poll_seconds=60):
                 print(f"[{time.strftime('%H:%M:%S')}] firing {name}")
                 res = run_job(name)
                 state = _state()
-                state[name]["_epoch"] = time.time()
+                # A job added to the config after the daemon started has no
+                # state row yet; index-assigning it raised KeyError and killed
+                # the daemon loop entirely.
+                state.setdefault(name, {})["_epoch"] = time.time()
                 _save_state(state)
                 print(f"  -> {'ok' if res['ok'] else 'FAILED'} in {res.get('duration_s')}s")
         time.sleep(poll_seconds)

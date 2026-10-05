@@ -10,14 +10,31 @@ Stdlib-only core (no dependencies), 327 tests, zero production traffic.
 
 ## What flippy can do
 
-### 1. Route LLM requests across 5 free providers with automatic failover
+### 1. Route LLM requests across any providers you hold keys for, with automatic failover
 
-flippy speaks the **OpenAI chat/completions wire format**, so it is
-compatible with any OpenAI- or Anthropic-compatible endpoint — brand-agnostic.
-Bring keys for whatever providers you use: OpenRouter, freeinference.org,
-Groq, NVIDIA NIM, Cloudflare Workers AI, or your OWN OpenAI/Anthropic-compatible
-endpoint (OPENAI_API_BASE + OPENAI_API_KEY, or ANTHROPIC_BASE_URL +
-ANTHROPIC_API_KEY). When one rate-limits, errors, or hangs, the next picks up
+flippy speaks the **OpenAI chat/completions wire format**, so it is compatible
+with any endpoint that does too — brand-agnostic, and **not** limited to the
+bundled names. Four ways to add a provider, no code change for any of them:
+
+| Path | Example |
+|---|---|
+| A built-in, switched on by its key | `GROQ_KEY`, `TOGETHER_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`, `XAI_API_KEY`, `PERPLEXITY_API_KEY`, `DASHSCOPE_API_KEY`, `HF_TOKEN`, … (22 in total) |
+| Local / self-hosted, switched on by its base URL | `OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `VLLM_BASE_URL` |
+| **Any** endpoint, via an env-var pair | `ACME_API_KEY` + `ACME_BASE_URL` registers a provider named `acme` |
+| A JSON catalog, or numbered endpoints | `FLIPPY_PROVIDERS_JSON=/etc/flippy/providers.json`, `FLIPPY_PROVIDER_1_*` |
+
+```bash
+python -m src.loomweaver providers          # what you have configured right now
+python -m src.loomweaver providers --all    # the whole catalog + how to enable each
+```
+
+The generic path accepts `_API_KEY` / `_APIKEY` / `_KEY` / `_TOKEN` for the
+credential and `_BASE_URL` / `_API_BASE` / `_BASE` / `_ENDPOINT` / `_URL` for
+the endpoint, with `<PREFIX>_MODELS` to override the model list. A credential
+with **no** endpoint is ignored — a `STRIPE_API_KEY` in your environment never
+becomes an LLM. Infra prefixes (AWS, GITHUB, AZURE, …) are excluded outright.
+
+When one rate-limits, errors, or hangs, the next picks up
 mid-request. **No single provider (Groq or otherwise) is required.**
 
 ```bash
@@ -51,8 +68,11 @@ What the router does for you, in order:
   TF-IDF cache (cosine ≥ 0.92, 168h TTL) and return instantly without a
   provider call. Stateful tool conversations skip the cache.
 - **Hedged requests** — fire the top two providers concurrently, take the
-  first answer, abandon the loser. Kills tail latency. (Threading-based;
-  burns 2x quota on slow tails.)
+  first answer, abandon the loser. Opt-in, and *not* a tail-latency win on our
+  own measurement: `benchmarks/HEDGED.md` records p50 essentially flat
+  (1.199s vs 1.208s) and p95 **worse** (4.360s vs 1.635s), because on a slow
+  tail both requests complete. Use it when availability matters more than tail
+  latency. (Threading-based; burns 2x quota on slow tails.)
 - **Deadline budgets** — `route(..., timeout_budget_s=30)` stops walking
   providers and retrying when the budget is spent.
 - **Full attempt trails** — every provider attempt emits an event with
@@ -92,7 +112,7 @@ python -m src.loomweaver agent "fetch example.com and summarize" --session resea
 python -m src.loomweaver agent "list the src directory" --model groq/openai/gpt-oss-120b
 python -m src.loomweaver agent "edit the report" --tools shell,write_file   # pre-authorize
 ```
-**Pre-flight intake (`--tools`, Hermes-style):** the operator declares which
+**Pre-flight intake (`--tools`):** the operator declares which
 dangerous capabilities are authorized BEFORE the run — the model only ever sees
 that set (no stealth auto-grant of shell/sql/write on a goal keyword). Same on
 armada (`--tools shell` intersects into every role). De-emphasize friction: the
@@ -197,7 +217,33 @@ python -m src.loomweaver cron --daemon     # interval loop; jobs defined in cron
 Jobs may only invoke loomweaver subcommands (allowlist enforced) and run
 as subprocesses — a poisoned job file can't escalate.
 
-### 8. Multimodal hub (optional, needs litellm)
+### 8. It gets smarter the more you use it (self-learning memory)
+
+Every routed call and every agent run is recorded locally — goal, provider,
+latency, attempts, tools used, outcome. That memory does three things:
+
+- **Routing priors.** On startup the adaptive router replays what previous runs
+  measured, so a fresh process does not have to rediscover which provider is
+  fast and which one fails. The EWMA still decays a stale prior the moment
+  live measurements disagree.
+- **A user profile.** Inferred, never asked for: which provider actually works
+  for you, which tools your goals need, the vocabulary you reuse.
+- **Self-correction.** A failed run files a lesson against the shape of its
+  goal; a *similar* future goal retrieves it into the system prompt. You can
+  also teach it directly.
+
+```bash
+python -m src.loomweaver profile     # what flippy has inferred about you
+python -m src.loomweaver profile --json
+python -m src.loomweaver learn "when I say deploy, run the migration script first"
+python -m src.loomweaver forget --all
+```
+
+A cold start injects nothing — a first-time user pays no context cost. Storage
+is one SQLite file (`runs/learning.db`), stdlib only, and nothing leaves the
+machine. Disable with `LOOMWEAVER_LEARNING_ENABLED=0`.
+
+### 9. Multimodal hub (optional, needs litellm)
 
 ```bash
 pip install -r requirements.txt

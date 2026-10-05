@@ -97,11 +97,13 @@ class RotationState:
     def mark_dead(self, provider: str, key_index: int, reason: str = ""):
         """Permanently skip a revoked/unauthorized key (401/403)."""
         with self._lock:
-            _, dead, _ = self._row(provider)
+            active, dead, _ = self._row(provider)
             if not any(d.get("index") == key_index for d in dead):
                 dead.append({"index": key_index, "reason": str(reason)[:200],
                              "at": round(time.time(), 3)})
-            self._save(provider, 0, dead)
+            # Preserve the rotation cursor: saving 0 here rewound the provider to
+            # its first key on every failure, so a multi-key fleet never spread.
+            self._save(provider, active, dead)
 
     def mark_exhausted(self, provider: str, key_index: int,
                        cooldown_until: float | None = None,
@@ -111,12 +113,12 @@ class RotationState:
             time.time() + (retry_after if retry_after and retry_after > 0
                            else DEFAULT_COOLDOWN_S))
         with self._lock:
-            _, dead, _ = self._row(provider)
+            active, dead, _ = self._row(provider)
             dead = [d for d in dead if d.get("index") != key_index
                     or d.get("kind") != "exhausted"]
             dead.append({"index": key_index, "kind": "exhausted",
                          "until": round(until, 3), "at": round(time.time(), 3)})
-            self._save(provider, 0, dead)
+            self._save(provider, active, dead)  # keep the cursor where it was
 
     # ------------------------------------------------------------- selection
 

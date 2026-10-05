@@ -1,8 +1,10 @@
 """Hardened tool registry for Loomweaver — every model-chosen action is guarded."""
+import contextlib
 import json
 import os
 import re
 import subprocess
+import threading
 import urllib.request
 
 from . import security
@@ -27,8 +29,10 @@ def http_get(url, max_chars=2000):
     if not ok:
         return f"blocked: {reason}"
     req = urllib.request.Request(url, headers={"User-Agent": "flippy/0.1.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode("utf-8", "ignore")[:max_chars]
+    # guarded_urlopen re-runs check_url on every redirect hop: a public URL that
+    # 302s to a private/metadata address must not become an SSRF bypass.
+    with security.guarded_urlopen(req, timeout=30) as r:
+        return redact(r.read().decode("utf-8", "ignore")[:max_chars])
 
 
 KEY_REDACT_RE = re.compile(
@@ -38,8 +42,14 @@ KEY_REDACT_RE = re.compile(
     r"gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|"
     r"ghr_[A-Za-z0-9]{20,}|"
     r"xox[bpasr]-[A-Za-z0-9-]{20,}|"
+    # freeinference.org token. The separator is not documented publicly, so
+    # both `-` and `_` are accepted; over-matching a token-like string here
+    # costs nothing, under-matching leaks a credential into a model context.
+    r"fi[-_][A-Za-z0-9_-]{20,}|"
     r"sk_live_[A-Za-z0-9]{20,}|sk_test_[A-Za-z0-9]{20,}|"
     r"rk_live_[A-Za-z0-9]{20,}|rk_test_[A-Za-z0-9]{20,}|"
+    r"\b(?:[a-z0-9_]*(?:api[_-]?key|apikey|secret|token|passwd|password)"
+    r"|access[_-]?key(?:[_-]?id)?)[a-z0-9_]*\b\s*[:=]\s*\S{8,}|"
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----|"
     r"\btype\b\s*:\s*\"\bservice_account\b\"[\s\S]{0,500}?private_key\b\s*:\s*\"|"
     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
@@ -91,13 +101,36 @@ def list_dir(path="."):
     return "\n".join(sorted(os.listdir(path)))
 
 
+# Read-only shell context. Thread-local so concurrent agent roles in an armada
+# each get their own setting, and deliberately NOT a tool argument so the model
+# cannot talk its way out of it.
+_shell_tls = threading.local()
+
+
+def shell_readonly_active():
+    return bool(getattr(_shell_tls, "readonly", False))
+
+
+@contextlib.contextmanager
+def shell_readonly(flag=True):
+    """Run the enclosed dispatches with the shell held to the read-only tier."""
+    prev = getattr(_shell_tls, "readonly", False)
+    _shell_tls.readonly = bool(flag)
+    try:
+        yield
+    finally:
+        _shell_tls.readonly = prev
+
+
 @tool("shell", "Run a shell command (sandboxed env; dangerous patterns blocked; "
       "timeout clamped to 60s; LOOMWEAVER_SAFE_MODE=1 disables)",
       {"cmd": "str", "timeout": "int=60"})
 def shell(cmd, timeout=60):
     if SAFE_MODE:
         return "blocked: safe mode enabled (shell disabled)"
-    ok, reason = security.check_shell(cmd)
+    # `readonly` comes from thread-local caller context, never from the tool
+    # arguments: a model that could pass readonly=False would simply pass it.
+    ok, reason = security.check_shell(cmd, readonly=shell_readonly_active())
     if not ok:
         return f"blocked: {reason}"
     try:
@@ -225,9 +258,9 @@ def http_post_json(url, body, max_chars=2000):
                  "User-Agent": "flippy/0.1.0"},
         method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with security.guarded_urlopen(req, timeout=30) as r:
             status = r.status
-            head = r.read().decode("utf-8", "ignore")[:max_chars]
+            head = redact(r.read().decode("utf-8", "ignore")[:max_chars])
     except urllib.error.HTTPError as e:
         return f"status={e.code}\n{e.read().decode('utf-8', 'ignore')[:max_chars]}"
     return f"status={status}\n{head}"

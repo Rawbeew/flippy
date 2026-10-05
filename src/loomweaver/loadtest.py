@@ -20,7 +20,14 @@ def run(provider=None, concurrency=4, requests=8, prompt="Write a 100-word story
     """Fire `requests` total at a provider with `concurrency` parallel workers."""
     creds = creds or load_creds()
     provs = build_providers(creds)
-    prov = next((p for p in provs if p["name"] == provider), provs[0])
+    if not provs:
+        raise SystemExit(
+            "no providers configured — set at least one API key "
+            "(see `python -m loomweaver providers --all`)")
+    prov = next((p for p in provs if p["name"] == provider), None)
+    if prov is None:
+        raise SystemExit(f"no provider named {provider!r}; configured: "
+                         + ", ".join(p["name"] for p in provs))
     runlog = RunLog(runs_dir)
     runlog.emit({"type": "loadtest_start", "provider": prov["name"],
                  "concurrency": concurrency, "requests": requests})

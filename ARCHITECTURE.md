@@ -16,13 +16,16 @@ is stdlib-only except the optional litellm-based AI hub.
 ┌─────────────────────────────────────────────────────────────┐
 │                    ROUTING CORE (core.py)                    │
 │                                                              │
+│  0. learning.seed_policy()      ← replay prior outcomes     │
 │  1. semantic_cache.lookup()     ← hit? return immediately   │
-│  2. quota_ledger.check_quota()  ← exhausted? skip provider  │
-│  3. key_rotation.next_key()     ← dead key? rotate          │
-│  4. chat(provider, messages)    ← the actual LLM call       │
-│  5. usage.record()              ← persist metrics           │
-│  6. quota_ledger.record_result()← update cooldown state     │
-│  7. semantic_cache.store()      ← cache for next time       │
+│  2. router_policy.order()       ← EWMA success/latency      │
+│  3. quota_ledger.check_quota()  ← exhausted? skip provider  │
+│  4. key_rotation.live_pairs()   ← dead/exhausted? rotate    │
+│  5. chat(provider, messages)    ← the actual LLM call       │
+│  6. usage.record()              ← persist metrics           │
+│  7. quota_ledger.record_result()← update cooldown state     │
+│  8. semantic_cache.store()      ← cache for next time       │
+│  9. learning.record_route()     ← outcome becomes a prior   │
 │                                                              │
 │  On failure: failover to next provider (free-first order)   │
 │  On 429: exponential backoff + cooldown                     │
@@ -54,8 +57,17 @@ src/
     ├── agent.py          ← single-agent loop (plan→act→observe→done)
     ├── armada.py         ← multi-agent fleet: scout→builder→verifier→reporter
     ├── tools.py          ← tool registry with security guards
-    ├── security.py       ← SSRF guard, path jail, shell blocklist, env strip
+    ├── security.py       ← SSRF guard (redirect-safe), path jail, default-deny
+    │                        shell allowlist with a read-only tier, env strip
+    ├── observability.py  ← structured run/telemetry events, alerting, and the
+    │                        interception layer (decoy credentials, disguised
+    │                        operator runbook, expansion payload, redirect chain)
+    │                        that diverts a probing model away from real secrets
+    ├── learning.py       ← self-learning memory: outcome priors for the router,
+    │                        an inferred user profile, and similarity-retrieved
+    │                        lessons injected into the system prompt
     ├── quota_ledger.py   ← per-provider quota tracking + cooldowns
+    ├── router_policy.py  ← EWMA success/latency provider ordering + retry policy
     ├── semantic_cache.py ← TF-IDF cosine similarity response cache
     ├── usage.py          ← per-provider usage analytics
     ├── key_rotation.py   ← multi-key rotation state machine
@@ -85,9 +97,9 @@ User prompt
 │    ├── exhausted → skip, log quota_skip                    │
 │    └── available → continue                                 │
 │                                                             │
-│  key_rotation.next_key(name)                                │
-│    ├── all keys dead → skip                                 │
-│    └── live key → use it                                    │
+│  key_rotation.live_pairs(name, keys)                        │
+│    ├── no live pair → skip provider                         │
+│    └── live (key, index) → use it, advance() on success     │
 │                                                             │
 │  POST {provider.url}                                        │
 │    ├── 200 → usage.record() → cache.store() → RETURN       │

@@ -51,7 +51,7 @@ def _redact_secrets(text):
             r"(sk-[A-Za-z0-9_-]{10,}|gsk_[A-Za-z0-9]{20,}|nvapi-[A-Za-z0-9_-]{10,}|"
             r"cfut_[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|"
             r"AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{20,}|"
-            r"xai-[a-z0-9]{20,}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,})")
+            r"xai-[a-z0-9]{20,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})")
         return pattern.sub("[REDACTED]", s)
     except Exception:
         return str(text)
@@ -400,8 +400,11 @@ def main():
     if a.rag == "query":
         q = " ".join(a.args)
         hits = rag_query(q, top_k=a.top_k)
+        if not hits:
+            print("  (no matches)")
         for h in hits:
-            print(f"  [{h['score']}] {h['text'][:120]}"); return
+            print(f"  [{h['score']}] {h['text'][:120]}")
+        return
     if a.rag_chat:
         msgs = [{"role": "user", "content": a.rag_chat}]
         print(smart_chat(msgs, use_rag=True, top_k=a.top_k)["content"]); return

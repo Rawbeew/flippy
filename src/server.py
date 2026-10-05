@@ -129,8 +129,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.path != "/v1/chat/completions":
                 return self._send(404, {"error": "not found"})
-            n = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(n) if n else b""
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            if n > MAX_BODY_BYTES:
+                return self._send(413, {"error": {
+                    "message": f"request body exceeds {MAX_BODY_BYTES} bytes",
+                    "type": "invalid_request_error"}})
+            raw = self.rfile.read(n) if 0 < n <= MAX_BODY_BYTES else b""
             try:
                 req = json.loads(raw or b"{}")
             except json.JSONDecodeError:
@@ -197,22 +204,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": {"message": "internal error", "type": "internal_error"}})
 
 
+# Every variable flippy_providers.get_providers() reads. Keeping this list in
+# sync with the registry is what lets the HTTP endpoint serve the same provider
+# set as the CLI — the bring-your-own OPENAI_API_BASE / ANTHROPIC_BASE_URL path
+# was missing here, so /v1/chat/completions returned "no providers configured"
+# for a configuration `loomweaver providers` happily listed.
+_PROVIDER_ENV = ("OPENROUTER_KEY", "FREEINFERENCE_KEY", "CLOUDFLARE_TOKEN",
+                 "CLOUDFLARE_ACCOUNT_ID", "NVIDIA_KEY", "GROQ_KEY",
+                 "OPENAI_API_BASE", "OPENAI_API_KEY", "OPENAI_MODELS",
+                 "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY")
+
+
 def _creds_from_env():
-    """Map FLIPPY_* / provider env vars onto the creds dict shape."""
-    keys = ("OPENROUTER_KEY", "FREEINFERENCE_KEY", "CLOUDFLARE_TOKEN",
-            "CLOUDFLARE_ACCOUNT_ID", "NVIDIA_KEY", "GROQ_KEY")
-    return {k: os.environ[k] for k in keys if os.environ.get(k)} or None
+    """Map provider env vars onto the creds dict shape. None when nothing set."""
+    return {k: os.environ[k] for k in _PROVIDER_ENV if os.environ.get(k)} or None
+
+
+# Bound the request body: an unbounded Content-Length read is a trivial memory
+# DoS on an exposed endpoint. 4 MB is generous for a chat completion payload.
+MAX_BODY_BYTES = int(os.environ.get("FLIPPY_MAX_BODY_BYTES", str(4 * 1024 * 1024)))
 
 
 def main():
-    # Guarded decoy install (default OFF): set LOOMWEAVER_DECOYS=1 to plant the
-    # decoy-credential layer at server startup. Never raises; never crashes boot.
-    if os.environ.get("LOOMWEAVER_DECOYS") == "1":
-        try:
-            from loomweaver import observability
-            observability.ensure_decoys()
-        except Exception:
-            pass  # the decoy layer must never block the server from booting
     # Bind localhost by default — set HOST=0.0.0.0 to expose (set FLIPPY_AUTH_TOKEN too)
     BIND_HOST = os.environ.get("HOST", "127.0.0.1")
     # audit run-001 C5: refuse an exposed bind without an auth token — an

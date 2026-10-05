@@ -2,9 +2,15 @@
 import argparse
 import json
 import os
+import sys
 
-from . import __version__, agent, evals, loadtest
+from . import __version__, agent, evals, learning, loadtest
 from .core import build_providers, load_creds
+
+try:
+    from flippy_providers import describe_catalog
+except ImportError:  # pragma: no cover - path fallback for direct invocation
+    from ..flippy_providers import describe_catalog
 
 # Provider key well-formedness spec for the `doctor` command. Prefix + minimum
 # body length; a configured key that matches neither prefix nor length is FAIL.
@@ -110,6 +116,25 @@ def doctor(creds=None, env=None):
     return results
 
 
+def _resolve_tool_scope(raw, allow_empty=False):
+    """Parse --tools into an explicit scope, refusing unknown tool names.
+
+    A typo used to fall through to goal-based auto-grant, which silently handed
+    the run a *wider* toolset than the operator asked for. Unknown names are a
+    hard error now.
+    """
+    if not raw:
+        return None if allow_empty else "auto"
+    from . import tools as _tools
+    asked = [t.strip() for t in raw.split(",") if t.strip()]
+    unknown = [t for t in asked if t not in _tools.TOOLS]
+    if unknown:
+        raise SystemExit(
+            f"error: unknown tool(s) in --tools: {', '.join(unknown)}\n"
+            f"available: {', '.join(sorted(_tools.TOOLS))}")
+    return asked
+
+
 def _print_doctor_results(results):
     for r in results:
         flag = {"OK": "[ OK ]", "WARN": "[WARN]", "FAIL": "[FAIL]"}[r["status"]]
@@ -164,6 +189,20 @@ def main(argv=None):
 
     # providers
     p = sub.add_parser("providers", help="list configured providers/models")
+    p.add_argument("--all", action="store_true",
+                   help="show every provider flippy can talk to and how to enable it")
+
+    # memory: the self-learning layer
+    p = sub.add_parser("profile", help="show what flippy has learned about you")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+
+    p = sub.add_parser("learn", help="teach flippy a rule it should apply to similar goals")
+    p.add_argument("lesson", help="the rule, e.g. 'when I say deploy, run the staging script first'")
+    p.add_argument("--when", default="", help="the kind of goal it applies to (default: the rule itself)")
+
+    p = sub.add_parser("forget", help="erase learned lessons")
+    p.add_argument("--id", type=int, default=None, help="forget one lesson by id")
+    p.add_argument("--all", action="store_true", help="forget every lesson")
 
     # doctor / check-config
     p = sub.add_parser("doctor", aliases=["check-config"],
@@ -189,13 +228,48 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if args.cmd == "providers":
-        for p_ in build_providers(load_creds()):
+        if getattr(args, "all", False):
+            print("Every provider flippy speaks (OpenAI chat/completions wire format).")
+            print("Set the variable in column 3 to switch one on — any of them.\n")
+            print(f"{'provider':16} {'cost':6} {'activate with':52} models override")
+            print("-" * 104)
+            for row in describe_catalog():
+                print(f"{row['name']:16} {row['cost']:6} {row['activate_with']:52} "
+                      f"{row['models_env'] or '-'}")
+            print("\nPlus: any <PREFIX>_API_KEY + <PREFIX>_BASE_URL pair registers itself.")
+            return 0
+        configured = build_providers(load_creds())
+        if not configured:
+            print("No providers configured. Run `flippy providers --all` to see the options.")
+            return 1
+        for p_ in configured:
             print(f"{p_['name']:14} {p_['cost']:5} models: {', '.join(p_['models'])}")
+        print(f"\n{len(configured)} configured — add any other OpenAI-compatible endpoint "
+              f"with <PREFIX>_API_KEY + <PREFIX>_BASE_URL.")
+    elif args.cmd == "profile":
+        store = learning.get_store()
+        if getattr(args, "json", False):
+            print(json.dumps(store.profile(), indent=2, default=str))
+        else:
+            print(learning.render_text(store.profile()))
+            st = store.stats()
+            print(f"  store               {st['interactions']} interactions, "
+                  f"{st['lessons']} lessons\n  db                  "
+                  f"{os.path.normpath(store.db_path)}")
+    elif args.cmd == "learn":
+        lid = learning.get_store().add_lesson(args.lesson, trigger=args.when)
+        print(f"learned (lesson {lid}): {args.lesson}")
+        print("It will be injected into the context of goals that look like this one.")
+    elif args.cmd == "forget":
+        if not getattr(args, "all", False) and args.id is None:
+            print("usage: flippy forget --all   |   flippy forget --id N", file=sys.stderr)
+            return 2
+        learning.get_store().forget(args.id)
+        print("forgot lesson " + str(args.id) if args.id is not None else "forgot every lesson")
     elif args.cmd in ("doctor", "check-config"):
         _print_doctor_results(doctor())
     elif args.cmd == "agent":
-        tool_scope = ([t.strip() for t in args.tools.split(",") if t.strip()]
-                      if args.tools else "auto")
+        tool_scope = _resolve_tool_scope(args.tools)
         out = agent.run(args.goal, session_id=args.session, model=args.model,
                         max_steps=args.max_steps, tool_scope=tool_scope)
         print(json.dumps({"result": out["result"], "run_dir": out["run_dir"]}, indent=2))
@@ -225,8 +299,7 @@ def main(argv=None):
         print(json.dumps(get_quota_status(), indent=2))
     elif args.cmd == "armada":
         from .armada import Armada
-        tool_scope = ([t.strip() for t in args.tools.split(",") if t.strip()]
-                      if args.tools else None)
+        tool_scope = _resolve_tool_scope(args.tools, allow_empty=True)
         fleet = Armada(args.mission, tool_scope=tool_scope).standard_pipeline()
         result = fleet.execute(creds=load_creds(), max_steps_per_agent=args.max_steps)
         print(json.dumps(result, indent=2))

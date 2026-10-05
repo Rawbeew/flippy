@@ -353,7 +353,20 @@ def test_safe_invoke_renders_each_observation_once():
     finally:
         spy.stop()
         assert seen.count("response_served") == 1, f"response_served seen {seen}"
-        assert seen.count("expansion_served") == 1, f"expansion_served seen {seen}"
+        # The agent gate only consumes `body`, so the expansion payload must NOT
+        # be built: it cost ~580ms of zlib per interception and was discarded.
+        assert seen.count("expansion_served") == 0, f"expansion_served seen {seen}"
+
+
+def test_route_request_builds_expansion_only_when_asked():
+    """HTTP serving still gets the full layer set; the agent gate does not."""
+    from src.loomweaver import observability
+    heavy = observability.route_request("", threat_label="path_traversal_chain")
+    light = observability.route_request("", threat_label="path_traversal_chain",
+                                       skip_heavy=True)
+    assert heavy["expansion"] and heavy["headers"]
+    assert light["expansion"] == b"" and light["headers"] == {}
+    assert light["body"] == heavy["body"]
 
 
 def test_safe_invoke_benign_dispatches_once():
@@ -415,10 +428,12 @@ def test_struct_event_hostile_request_present_threat():
 def test_struct_event_defaults_severity_and_host(tmp_path):
     """B4-3: unset severity/host fall back to documented defaults."""
     import os as _os
-    name = _os.environ.get("COMPUTERNAME", "unknown")
     s = observability.emit_struct_event({"event": "unit_test"})
     assert s["severity"] == "info"
-    assert s["host"] == name
+    # host falls back to the real machine name — it used to read COMPUTERNAME,
+    # a Windows-only var, so every Linux/macOS event said host="unknown".
+    assert s["host"] == observability.host_label()
+    assert s["host"] and s["host"] != "unknown"
 
 
 def test_struct_event_writes_single_line_json_when_enabled(tmp_path):

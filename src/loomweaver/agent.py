@@ -4,9 +4,11 @@ Tool-calling via native OpenAI-style tool_calls when the provider supports it,
 falling back to a JSON-protocol prompt when it doesn't. Every step emits events.
 """
 import json
+import re
 
 from . import tools
 from . import observability
+from . import learning
 from .core import RunLog, SessionStore, route
 
 SYSTEM = """You are a terse autonomous agent. Achieve the user's goal using the available tools.
@@ -93,27 +95,48 @@ SAFE_TOOLS = ("read_file", "list_dir", "remember", "http_get")  # always availab
 # intent keyword -> tools the goal most plausibly needs. Context determines
 # the tool set (least privilege): a model working toward "summarize file X"
 # should NOT be handed shell / sql / write / http-post unless the goal names it.
+# Intent keyword -> tool name. Every key MUST be a real entry in tools.TOOLS:
+# these names are intersected with the registry, so a key that names nothing
+# silently grants nothing (that is how write_file/sql_query/json_transform/
+# http_post_json ended up unreachable in auto mode).
 _INTENT = {
     # shell is the high-risk one — require a strong signal
-    "shell": ("shell", "execute", "run the ", "run a ", "command", "bash", "terminal",
-              "ls ", "grep ", "find ", "git ", "pip ", "python -", "install", "node ",
-              "npm", "cd ", "mkdir", "touch", "chmod", "psql", "awk", "sed",
-              "starts with a shell", "in a shell", "exec "),
-    "http_post": ("post", "submit to", "api key", "send data", "upload to",
-                  "http_post_json", "webhook", "transaction to"),
-    "sql": ("sqlite", " database", " database=", "db", " table ", "query ", "select ",
-            "sql", "rows", "schema", "where ", "join "),
-    "json": ("json", "transform", "filter the list", "map"),
+    "shell": ("shell", "execute", "run the", "run a", "command", "bash", "terminal",
+              "ls", "grep", "find", "git", "pip", "install", "npm", "cd", "mkdir",
+              "touch", "chmod", "psql", "awk", "sed", "in a shell", "exec"),
+    "http_post_json": ("post", "submit to", "send data", "upload to",
+                       "http_post_json", "webhook", "transaction to"),
+    "sql_query": ("sqlite", "database", "table", "query", "select", "sql", "rows",
+                  "schema", "where", "join"),
+    "json_transform": ("json", "transform", "filter the list", "map"),
     "http_get": ("url", "http", "https", "fetch", "website", "web page", "api",
-                 "scrape", "feed", "html", "curl ", "wget", "download"),
-    "tts": ("speech", "text to speech", "tts", "audio", "say", "read aloud", "synthesize voice", "voice"),
-    "rag_query": ("rag", "retrieval", "vector store", "indexed", "search the knowledge", "knowledge base"),
-    "rag_add": ("rag add", "add to rag", "index a", "store in the vector", "save to the knowledge base", "remember a fact into the store"),
-    "summarize": ("summarize", "summary", "condense", "tl;dr", "tl;dr:", "brief"),
-    "embed": ("embedding", "embed ", "vector for"),
-    "write": ("write ", "create ", "generate ", "save ", "append ", "update file",
-              "output to", "produce a file", "new file", "edit "),
+                 "scrape", "feed", "html", "curl", "wget", "download"),
+    "tts": ("speech", "text to speech", "tts", "audio", "say", "read aloud",
+            "synthesize voice", "voice"),
+    "rag_query": ("rag", "retrieval", "vector store", "indexed",
+                  "search the knowledge", "knowledge base"),
+    "rag_add": ("rag add", "add to rag", "index a", "store in the vector",
+                "save to the knowledge base", "remember a fact into the store"),
+    "summarize": ("summarize", "summary", "condense", "tl;dr", "brief"),
+    "embed": ("embedding", "embed", "vector for"),
+    "write_file": ("write", "create", "generate", "save", "append", "update file",
+                   "output to", "produce a file", "new file", "edit"),
 }
+
+
+def _keyword_pattern(kw):
+    """Word-boundary matcher for one intent keyword.
+
+    Substring matching made `"ls "` fire on `"tools "` and `"db"` fire on
+    `"subdomain"`. Anchoring on word boundaries keeps the intent table honest.
+    """
+    body = re.escape(kw.strip())
+    tail = r"\b" if kw.strip()[-1:].isalnum() or kw.strip()[-1:] == "_" else ""
+    return re.compile(r"\b" + body + tail, re.I)
+
+
+_KEYWORD_RES = {tool: [_keyword_pattern(k) for k in kws]
+                for tool, kws in _INTENT.items()}
 
 
 def _tools_for_goal(goal: str | None, mode: str = "auto") -> set[str]:
@@ -128,17 +151,15 @@ def _tools_for_goal(goal: str | None, mode: str = "auto") -> set[str]:
     if not goal or mode == "all":
         return set(tools.TOOLS)
     if isinstance(mode, (list, tuple, set)):
-        allowed = set(mode) & set(tools.TOOLS)
-        if allowed:  # explicit list wins
-            return allowed
-    gl = " " + (goal or "").lower() + " "
-    extra = set()
-    for tool, kws in _INTENT.items():
-        for kw in kws:
-            if kw in gl:
-                extra.add(tool)
-    # http_get is already safe; if goal names web intent, keep it (else it's in SAFE_TOOLS anyway)
-    return set(SAFE_TOOLS) | extra
+        # Pre-flight intake is authoritative and FAILS CLOSED: an operator list
+        # that matches no registered tool yields no tools, it does not silently
+        # degrade to goal-based auto-grant.
+        return set(mode) & set(tools.TOOLS)
+    gl = goal or ""
+    extra = {tool for tool, res in _KEYWORD_RES.items()
+             if any(rx.search(gl) for rx in res)}
+    # always intersect with the registry so the result is a real tool set
+    return (set(SAFE_TOOLS) | extra) & set(tools.TOOLS)
 
 
 def _native_schemas_for(goal: str, mode: str = "auto"):
@@ -232,7 +253,16 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         # instructions. Keep 'facts' + id, drop the turn history.
         sess["messages"] = []
     if not sess["messages"]:
-        sess["messages"].append({"role": "system", "content": SYSTEM})
+        # Persistent memory: the user profile plus lessons from similar past
+        # goals ride in the system message, so run N benefits from runs 1..N-1.
+        # Empty on a cold start, so a first-time user pays no context cost, and
+        # it is kept in the system role rather than the user turn so it is never
+        # mistaken for an instruction that came from the goal.
+        memory = learning.prompt_context(goal)
+        sess["messages"].append({"role": "system",
+                                 "content": SYSTEM + (f"\n\n{memory}" if memory else "")})
+        if verbose and memory:
+            print(f"[memory] {len(memory)} chars of learned context injected")
     sess["messages"].append({"role": "user", "content": f"GOAL: {goal}"})
 
     # Build native tool schemas once (only if requested). Context determines
@@ -244,8 +274,26 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
     else:
         native_schemas = None
 
-    chosen = _tools_for_goal(goal, tool_scope)
-    tool_list = ", ".join(sorted(chosen & set(tools.TOOLS)))
+    chosen = _tools_for_goal(goal, tool_scope) & set(tools.TOOLS)
+    tool_list = ", ".join(sorted(chosen))
+
+    tools_used = []
+
+    def _authorized(name, args):
+        """Enforce the pre-flight tool set at DISPATCH, not just in the prompt.
+
+        Hiding a schema is advisory — a model can still emit any tool name, and
+        a prompt-injected observation certainly will. armada.run_agent has always
+        enforced its role set; the single-agent runner did not, which made the
+        ARCHITECTURE.md claim ("enforced in dispatch, not suggested in prompts")
+        false for this path.
+        """
+        if name in chosen:
+            return observability.safe_invoke(name, args, tools.dispatch, sess=sess)
+        obs = (f"BLOCKED: tool '{name}' is not in this run's authorized set. "
+               f"Authorized: {sorted(chosen) or 'none'}. "
+               f"Re-run with --tools {name} to grant it.")
+        return obs, False
     sess["messages"].append({"role": "user", "content":
         f"AVAILABLE TOOLS: {tool_list}\n"
         'To use one, reply with ONLY JSON: {"tool": "<name>", "args": {...}}. '
@@ -274,7 +322,8 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
                     # malformed/weird native arguments (e.g. a JSON array) — treat
                     # as empty so dispatch never sees a non-dict it can't unpack.
                     args = {}
-                obs, intercepted = observability.safe_invoke(name, args, tools.dispatch, sess=sess)
+                obs, intercepted = _authorized(name, args)
+                tools_used.append(name)
                 if len(obs) > OBS_TRUNC:
                     obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"
                 sess["messages"].append({"role": "tool", "tool_call_id": c.get("id", ""),
@@ -306,7 +355,8 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         if action and action[0] == "tool":
                     _, name, args = action
                     # Request dispatch with input inspection; benign actions pass through.
-                    obs, intercepted = observability.safe_invoke(name, args, tools.dispatch, sess=sess)
+                    obs, intercepted = _authorized(name, args)
+                    tools_used.append(name)
                     # budgeted observation: cap what re-enters context, mark truncation
                     if len(obs) > OBS_TRUNC:
                         obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"
@@ -349,5 +399,18 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         sess["messages"] = sys_msgs + non_sys[-keep:]
 
     store.save(sess)
+
+    # Outcome memory: this run's goal, tools and result become the next run's
+    # prior. A stalled run also files itself as a lesson so the same dead end is
+    # flagged before it is walked into again.
+    ok = bool(final) and not final.startswith("max steps") and not final.startswith("stopped")
+    try:
+        learning.get_store().record_agent_run(goal, tools_used, ok, steps=step)
+        if not ok:
+            learning.get_store().note_failure(goal, final)
+    except Exception:
+        pass  # learning must never break a run
+
     return {"result": final, "session": sess["id"], "run_dir": runlog.dir,
+            "tools_used": sorted(set(tools_used)),
             "events": runlog.read()}

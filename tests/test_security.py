@@ -44,7 +44,7 @@ class TestPathJail:
         assert not ok
 
     def test_credentials_env_denied(self):
-        ok, _ = security.check_path("C:/Users/x/AppData/Local/hermes/secrets/credentials.env")
+        ok, _ = security.check_path("C:/Users/x/AppData/Local/agent/secrets/credentials.env")
         assert not ok
 
     def test_outside_project_denied(self):

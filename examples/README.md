@@ -40,7 +40,7 @@ python ../src/aihub.py --tooltest
 python ../src/aihub.py --embed "the quick brown fox"
 
 # aihub — RAG: add then query
-python ../src/aihub.py --rag add "Hermes is a personal AI agent."
+python ../src/aihub.py --rag add "flippy is a multi-provider LLM failover router."
 python ../src/aihub.py --rag query "what is hermes"
 python ../src/aihub.py --rag-chat "what is hermes"
 

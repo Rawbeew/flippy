@@ -32,10 +32,15 @@ BUILDER_WRITE_ROOTS = security.agent_write_roots()
 
 ROLES = {
     "scout": {
+        # `shell` is granted, but under the read-only tier: no rm/cp/mv, no
+        # output redirection, no `tee`, no network client, and only non-mutating
+        # `git` subcommands. The tier is enforced in security.check_shell, so the
+        # readonly flag is a real guarantee rather than a note in the tools list.
         "system": (
-            "You are Scout — a research agent. You read files, fetch pages, and "
-            "run read-only shell commands to gather facts. You NEVER write files "
-            "or make changes. Return structured findings: facts, paths, numbers. "
+            "You are Scout — a research agent. You read files, list directories, "
+            "run read-only shell commands, and fetch pages to gather facts. Your "
+            "shell cannot write, delete, redirect output, or push. You NEVER make "
+            "changes. Return structured findings: facts, paths, numbers. "
             "End with FINDINGS: <summary>."
         ),
         "tools": ["http_get", "read_file", "list_dir", "shell"],
@@ -82,7 +87,12 @@ PIPELINE = ["scout", "builder", "verifier", "reporter"]
 # Tools that can mutate the filesystem or an external service. A role marked
 # `readonly` is denied these regardless of its tools list — defense-in-depth
 # on top of the tools-list restriction.
-_WRITE_TOOLS = {"write_file", "json_transform", "http_post_json"}
+# `shell` is the one that matters most: it is a general-purpose write primitive
+# (`> file`, `rm`, `curl -X POST`), so omitting it made `readonly` decorative.
+# `sql_query` is documented SELECT-only but is denied here too — defense in
+# depth should not depend on the other layer being correct.
+_WRITE_TOOLS = {"write_file", "json_transform", "http_post_json",
+                "shell", "sql_query"}
 
 
 class Agent:
@@ -96,7 +106,7 @@ class Agent:
         self.goal = goal
         self.context = context or {}
         self.model = model
-        # Hermes-style pre-flight: the operator declares which tools they
+        # Pre-flight intake: the operator declares which tools they
         # authorize for this run. A role may only USE the intersection of its
         # role toolset and this operator set (cannot be granted a tool it lacks).
         self.tool_scope = set(tool_scope) if tool_scope else None
@@ -171,8 +181,14 @@ def run_agent(agent, creds=None, max_steps=12, log=None):
                            f"tool '{name}'. Allowed: {agent.allowed_tools()}")
                     intercepted = False
                 else:
-                    from .tools import dispatch
-                    obs, intercepted = observability.safe_invoke(name, args, dispatch)
+                    from . import tools as _tools
+                    # `shell` is a write primitive, so a readonly role only gets
+                    # it under the read-only tier: no rm/cp/mv, no redirection,
+                    # no tee, and only non-mutating `git` subcommands.
+                    readonly_shell = bool(ROLES[agent.role].get("readonly")) and name == "shell"
+                    with _tools.shell_readonly(readonly_shell):
+                        obs, intercepted = observability.safe_invoke(
+                            name, args, _tools.dispatch)
                 messages.append({"role": "user",
                                  "content": f"TOOL_RESULT {name}: {str(obs)[:1500]}"})
                 tool_event = {"type": "tool_call", "agent": agent.name,

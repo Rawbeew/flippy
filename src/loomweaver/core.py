@@ -13,6 +13,7 @@ try:
     from . import semantic_cache as _sc
     from . import usage as _usage
     from . import router_policy as _rp
+    from . import learning as _learning
 except ImportError:  # running as a top-level package: add src/ to path and retry
     import sys as _sys
     _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -20,6 +21,7 @@ except ImportError:  # running as a top-level package: add src/ to path and retr
     from loomweaver import semantic_cache as _sc
     from loomweaver import usage as _usage
     from loomweaver import router_policy as _rp
+    from loomweaver import learning as _learning
 
 try:  # key rotation is additive — other armada agents' modules must not break us
     from . import key_rotation as _kr
@@ -78,18 +80,14 @@ def build_providers(creds: dict[str, str] | None = None) -> list[dict]:
         import sys as _sys
         _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import flippy_providers as _reg
+    # Layer the credentials file over the process environment instead of
+    # replacing it. The old code copied only six named keys into a fresh dict,
+    # so the mere existence of ~/.flippy/credentials.env silently dropped the
+    # bring-your-own OPENAI_API_BASE / ANTHROPIC_BASE_URL endpoint.
+    env = dict(os.environ)
     if creds:
-        env = {
-            "OPENROUTER_KEY": creds.get("OPENROUTER_KEY"),
-            "FREEINFERENCE_KEY": creds.get("FREEINFERENCE_KEY"),
-            "CLOUDFLARE_TOKEN": creds.get("CLOUDFLARE_TOKEN"),
-            "CLOUDFLARE_ACCOUNT_ID": creds.get("CLOUDFLARE_ACCOUNT_ID"),
-            "NVIDIA_KEY": creds.get("NVIDIA_KEY"),
-            "GROQ_KEY": creds.get("GROQ_KEY"),
-        }
-        env = {k: v for k, v in env.items() if v}
-        return _reg.get_providers(env)
-    return _reg.get_providers()
+        env.update({k: v for k, v in creds.items() if v})
+    return _reg.get_providers(env)
 
 
 def is_retryable(status: int | None, body: dict | None) -> bool:
@@ -263,6 +261,7 @@ def route(messages: list[dict], model: str | None = None,
     deadline = (time.time() + timeout_budget_s) if timeout_budget_s else None
     retry = _rp.RetryPolicy(max_attempts=max_provider_attempts)
     policy = _rp.get_policy()
+    _learning.seed_policy(policy)   # persistent priors: no cold-start relearning
     last = None
     ledger = _ql.get_ledger()
     # --- semantic response cache: exact hash fast path, similarity fallback ---
@@ -277,6 +276,8 @@ def route(messages: list[dict], model: str | None = None,
                     on_event({"type": "cache_hit", "similarity": hit["similarity"],
                               "exact": hit["exact"]})
                 _usage.record("cache", model or "", True, 0.0, cached=True)
+                _learning.record_route(messages, "cache", model or "", True,
+                                       0.0, 1, cached=True)
                 return {"ok": True, "text": hit["response"], "usage": {}, "latency": 0.0,
                         "provider": "cache", "model": model or "", "cached": True,
                         "similarity": hit["similarity"]}
@@ -328,6 +329,8 @@ def route(messages: list[dict], model: str | None = None,
                         _sc.get_cache().store(messages, r.get("text", ""), model_tag=m or "")
                     except Exception:
                         pass
+                _learning.record_route(messages, prov["name"], m or "", True,
+                                       r.get("latency", 0.0), attempt)
                 return r
             _usage.record(prov["name"], m or "", False, r.get("latency", 0))
             last = r
@@ -350,7 +353,12 @@ def route(messages: list[dict], model: str | None = None,
             time.sleep(backoff)
         if deadline is not None and time.time() >= deadline:
             break  # budget spent — stop walking providers
-    return {"ok": False, "error": (last or {}).get("error", "all providers failed")}
+    err = (last or {}).get("error", "all providers failed")
+    _learning.record_route(messages, (last or {}).get("provider", ""), model or "",
+                           False, (last or {}).get("latency", 0.0),
+                           max_provider_attempts)
+    _learning.note_failure(messages, err)
+    return {"ok": False, "error": err}
 
 
 def route_hedged(messages, model=None, max_tokens=1024, creds=None, delay_ms=250,

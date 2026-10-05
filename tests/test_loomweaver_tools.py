@@ -146,7 +146,7 @@ class TestHttpPostJson:
         assert "blocked" in out
 
     def test_invalid_json_body_rejected_before_send(self):
-        with mock.patch.object(urllib.request, "urlopen") as m:
+        with mock.patch.object(tools.security, "guarded_urlopen") as m:
             out = tools.dispatch("http_post_json", {
                 "url": "https://example.com/api", "body": "{not json"})
         assert "not valid JSON" in out
@@ -170,7 +170,7 @@ class TestHttpPostJson:
             captured["data"] = req.data
             return R()
 
-        with mock.patch.object(urllib.request, "urlopen", side_effect=fake_urlopen):
+        with mock.patch.object(tools.security, "guarded_urlopen", side_effect=fake_urlopen):
             out = tools.dispatch("http_post_json", {
                 "url": "https://example.com/api",
                 "body": '{"hello": "world"}'})
@@ -187,7 +187,7 @@ class TestHttpPostJson:
         def fake_urlopen(req, timeout=30):
             raise urllib.error.HTTPError(req.full_url, 403, "Forbidden",
                                          hdrs=None, fp=io.BytesIO(b"denied"))
-        with mock.patch.object(urllib.request, "urlopen", side_effect=fake_urlopen):
+        with mock.patch.object(tools.security, "guarded_urlopen", side_effect=fake_urlopen):
             out = tools.dispatch("http_post_json", {
                 "url": "https://example.com/api", "body": "{}"})
         assert out.startswith("status=403")

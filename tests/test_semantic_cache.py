@@ -58,8 +58,8 @@ class SemanticCacheTest(unittest.TestCase):
         self.cache.store(msgs("tell me a joke"), "ha")
         self.cache.lookup(msgs("tell me a joke"))
         self.cache.lookup(msgs("Tell me a joke!"))
-        row = self.cache._conn.execute(
-            "SELECT hit_count FROM cache_entries").fetchone()
+        with self.cache._conn() as c:
+            row = c.execute("SELECT hit_count FROM cache_entries").fetchone()
         self.assertEqual(row[0], 2)
 
     def test_stateful_skipped(self):
@@ -107,12 +107,7 @@ class SemanticCacheTest(unittest.TestCase):
             else:
                 os.environ["LOOMWEAVER_CACHE_ENABLED"] = old_enabled
 
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-    # ------------------------------------------------- B2-3: agent tool-loop markers
+# ------------------------------------------------- B2-3: agent tool-loop markers
 
     def test_agent_tool_result_transcript_is_stateful(self):
         """A transcript exactly like agent.py emits (system prompt + GOAL + a
@@ -193,3 +188,7 @@ if __name__ == "__main__":
                 os.environ.pop("LOOMWEAVER_CACHE_ENABLED", None)
             else:
                 os.environ["LOOMWEAVER_CACHE_ENABLED"] = old_enabled
+
+
+if __name__ == "__main__":
+    unittest.main()

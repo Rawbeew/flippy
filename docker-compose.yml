@@ -5,7 +5,11 @@ services:
     ports:
       - "8080:8080"
     env_file:
-      - .env            # OPENROUTER_KEY=..., GROQ_KEY=... etc (see .env.example)
+      # OPENROUTER_KEY=..., GROQ_KEY=... etc (see .env.example).
+      # FLIPPY_AUTH_TOKEN is REQUIRED here: this file binds HOST=0.0.0.0, and
+      # server.py refuses to start on a non-loopback address without it (exit 2)
+      # rather than exposing an open LLM proxy on your provider keys.
+      - .env
     environment:
       - HOST=0.0.0.0
       - PORT=8080

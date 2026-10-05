@@ -5,7 +5,10 @@ harness/ — the complete harness: agent + eval + inference, one CLI.
 Layout (this dir):
   core.py      — provider registry, router w/ failover, metrics, session store
   agent.py     — agent runner loop: goal -> plan -> tool calls -> reflect -> done
-  tools.py     — built-in tool registry (http_get, file ops, shell, python_exec)
+  tools.py     — built-in tool registry (http_get/http_post_json, file ops,
+                shell, sql_query, json_transform, tts, rag, embed)
+  learning.py  — self-learning memory: outcome priors, user profile,
+                and lessons retrieved into the prompt on similar goals
   evals.py     — eval suites + scoring + report
   loadtest.py  — inference harness: concurrency, TTFT/TPS, provider comparison
   cli.py       — `python -m loomweaver ...` entrypoint

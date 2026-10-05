@@ -105,11 +105,38 @@ class TestContextDeterminedTools:
         assert "shell" not in agent._tools_for_goal("Query the sqlite database", "auto")
 
     def test_dangerous_tools_tracked_by_intent(self):
+        """Intent grants must name REAL tools.
+
+        Regression guard: the intent table used to map to `write`, `sql`,
+        `json`, `http_post` — none of which exist in tools.TOOLS — so auto mode
+        could never hand the model write_file/sql_query/json_transform/
+        http_post_json. Assert the registry names, and assert every granted
+        name is registered.
+        """
         from loomweaver import agent
-        # a write goal gets write; an api goal gets http; a db goal gets sql
-        assert "write" in agent._tools_for_goal("Write a report to out.md", "auto")
-        assert "sql" in agent._tools_for_goal("Query the users table", "auto")
-        assert "http_post" in agent._tools_for_goal("POST the data to the api key endpoint", "auto")
+        assert "write_file" in agent._tools_for_goal("Write a report to out.md", "auto")
+        assert "sql_query" in agent._tools_for_goal("Query the users table", "auto")
+        assert "http_post_json" in agent._tools_for_goal(
+            "POST the data to the webhook", "auto")
+        assert "json_transform" in agent._tools_for_goal(
+            "transform the json list and filter it", "auto")
+
+    def test_intent_table_has_no_phantom_tool_names(self):
+        from loomweaver import agent
+        phantoms = set(agent._INTENT) - set(agent.tools.TOOLS)
+        assert not phantoms, f"intent keys name no such tool: {sorted(phantoms)}"
+
+    def test_auto_mode_never_grants_an_unregistered_tool(self):
+        from loomweaver import agent
+        for goal in ("write a file", "query the database", "post to the webhook",
+                     "use the shell", "summarize this", "embed the text"):
+            granted = agent._tools_for_goal(goal, "auto")
+            assert granted <= set(agent.tools.TOOLS), (goal, granted)
+
+    def test_unknown_explicit_tool_fails_closed(self):
+        """A typo'd --tools entry must NOT silently degrade to auto-grant."""
+        from loomweaver import agent
+        assert agent._tools_for_goal("install the deps", ["shelll"]) == set()
 
     def test_explicit_and_all_modes(self):
         from loomweaver import agent
@@ -121,7 +148,7 @@ class TestContextDeterminedTools:
         from loomweaver import agent
         names = [x["function"]["name"] for x in agent._native_schemas_for(
             "Use the shell to list files", "auto")]
-        assert "shell" in names and "sql" not in names
+        assert "shell" in names and "sql_query" not in names
 
 # ---------------------------------------------------------------- kill switch
 class TestKillSwitch:
@@ -283,10 +310,10 @@ class TestRunLogCorruptLine:
         assert len(events) == 1
         assert events[0]["ok"] is True
 
-# ---------------------------------------------------------------- Hermes-style pre-flight intake
+# ---------------------------------------------------------------- pre-flight tool intake
 class TestOperatorPreFlightTools:
     """The operator declares which dangerous tools are authorized BEFORE a run.
-    --tools is the Hermes-style 'input everything before work' for capability:
+    --tools is the 'declare the capability surface before work' control:
     the model/roles only ever see the operator-authorized set."""
 
     def test_agent_tools_flag_sets_exact_scope(self):

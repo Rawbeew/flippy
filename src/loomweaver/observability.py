@@ -37,6 +37,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import threading
 import time
 import zlib
@@ -51,8 +52,12 @@ _INSTALL_NONCE = secrets.token_hex(16)
 _LOG_LOCK = threading.Lock()
 
 LOG_PATH = os.environ.get(
-    "LOOMWEAVER_telemetry_LOG",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "telemetry.log.jsonl"),
+    "LOOMWEAVER_TELEMETRY_LOG",
+    os.environ.get(
+        "LOOMWEAVER_telemetry_LOG",  # historical spelling, still honored
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "..", "..", "telemetry.log.jsonl"),
+    ),
 )
 
 # Optional SIEM-structured exporter. Set LOOMWEAVER_SIEM_JSONL to a file path
@@ -81,12 +86,29 @@ ALERT_EVENTS = {
 }
 
 
+def host_label() -> str:
+    """Best-effort host identifier.
+
+    Previously read `COMPUTERNAME`, a Windows-only variable: on the Linux and
+    macOS hosts CI and production run on, every event was stamped
+    `host: "unknown"`, which made the telemetry useless for triage.
+    """
+    for var in ("FLIPPY_HOST_LABEL", "COMPUTERNAME", "HOSTNAME"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    try:
+        return socket.gethostname() or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _telegram_build_message(event: dict) -> str:
     """Format an event as a short Telegram message. No full payload leaks."""
     kind = event.get("event", "event")
     threat = event.get("threat")
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(event.get("ts", time.time())))
-    host = event.get("host", os.environ.get("COMPUTERNAME", "unknown"))
+    host = event.get("host") or host_label()
     lines = [
         "flippy alert: " + kind,
         f"  host: {host}",
@@ -137,16 +159,21 @@ def log_metric(event: dict) -> None:
             with open(LOG_PATH, "a", encoding="utf-8") as f:
                 rec = dict(event)
                 rec.setdefault("ts", time.time())
-                rec.setdefault("host", os.environ.get("COMPUTERNAME", "unknown"))
+                rec.setdefault("host", host_label())
                 rec.setdefault("install_nonce_prefix", _INSTALL_NONCE[:8])
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 # Optional SIEM-structured fan-out (same event, stable schema)
                 emit_struct_event(rec)
-                # drain the queue out to Telegram for alert-worthy events
-                if rec.get("event") in ALERT_EVENTS:
-                    notify_alert(rec)
     except Exception:
-        pass
+        return
+    # Alert delivery happens OUTSIDE the lock: notify_alert() performs a
+    # network round-trip, and holding _LOG_LOCK across it used to block every
+    # other thread's telemetry for the full timeout.
+    if rec.get("event") in ALERT_EVENTS:
+        try:
+            notify_alert(rec)
+        except Exception:
+            pass
 
 
 def emit_struct_event(event: dict) -> dict:
@@ -175,7 +202,7 @@ def emit_struct_event(event: dict) -> dict:
             "timestamp": timestamp,
             "event": str(event.get("event", "event")),
             "severity": str(event.get("severity") or _DEFAULT_SEVERITY),
-            "host": str(event.get("host") or os.environ.get("COMPUTERNAME", "unknown")),
+            "host": str(event.get("host") or host_label()),
             "threat": str(event.get("threat") or ""),
             "path": str(event.get("path") or ""),
         }
@@ -632,10 +659,11 @@ def safe_invoke(name: str, args: dict, dispatch_fn, sess=None):
     if not hostile:
         return (dispatch_fn(name, args, sess=sess) if sess is not None
                 else dispatch_fn(name, args), False)
-    resp = route_request("", threat_label=hostile)
-    # consume the dict returned by route_request exactly once — do NOT re-render.
-    # `body` is the single canonical observation each branch renders; falling back
-    # defensively so a missing key can never crash the interception.
+    # Build only the layer safe_invoke actually hands back. route_request()
+    # also produces the expansion bytes and the redirect chain for HTTP
+    # serving; building them here cost ~580ms of zlib per interception and the
+    # result was discarded, because `body` is the only key consumed.
+    resp = route_request("", threat_label=hostile, skip_heavy=True)
     obs = resp.get("body") if resp else None
     if obs is None:
         obs = render_response(hostile) if resp else render_payload(hostile)
@@ -643,8 +671,13 @@ def safe_invoke(name: str, args: dict, dispatch_fn, sess=None):
 
 
 
-def route_request(payload: str, *, threat_label: Optional[str] = None) -> Optional[dict]:
-    """Inspect payload; if hostile, fire the right response layer."""
+def route_request(payload: str, *, threat_label: Optional[str] = None,
+                  skip_heavy: bool = False) -> Optional[dict]:
+    """Inspect payload; if hostile, fire the right response layer.
+
+    skip_heavy=True omits the expansion payload and the redirect chain, for
+    callers (the agent gate) that only consume `body`.
+    """
     label = threat_label or check_request(payload)
     if not label:
         return None
@@ -654,7 +687,7 @@ def route_request(payload: str, *, threat_label: Optional[str] = None) -> Option
         "payload_excerpt": payload[:200],
     })
     if label.startswith("path_traversal_chain") or "encoded_traversal" in label:
-        body, headers = placeholder_response(label)
+        body, headers = (b"", {}) if skip_heavy else placeholder_response(label)
         return {
             "layer": "static+body",
             # Layer-5 expanded placeholder bytes live under a distinct key so

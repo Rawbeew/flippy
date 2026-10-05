@@ -49,4 +49,32 @@ def _fresh_router_policy(monkeypatch):
         yield fresh
 
 
+@pytest.fixture(autouse=True)
+def _fresh_learning_store(tmp_path, monkeypatch):
+    """Isolate the self-learning store per test.
+
+    Without this, one test's recorded routes become the next test's routing
+    priors, and every test run appends to the developer's real runs/learning.db.
+    """
+    from loomweaver import learning
+    store = learning.LearningStore(db_path=str(tmp_path / "learning.db"))
+    learning.set_store(store)
+    yield store
+    learning.set_store(None)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_usage_db(tmp_path):
+    """Isolate per-provider usage per test.
+
+    The usage summary is aggregated by provider name, so an un-isolated DB lets
+    one test's synthetic prov_fast/prov_slow rows leak into another test's
+    dashboard assertions.
+    """
+    from loomweaver import core, usage
+    db = usage.UsageDB(db_path=str(tmp_path / "usage.db"))
+    with mock.patch.object(core._usage, "get_db", return_value=db):
+        yield db
+
+
 import unittest.mock as mock  # noqa: E402  (used by fixture above)

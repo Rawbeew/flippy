@@ -17,7 +17,9 @@ import math
 import os
 import re
 import sqlite3
+import threading
 import time
+from contextlib import contextmanager
 
 try:
     from . import security as _security  # noqa: F401  (guards stay importable)
@@ -100,19 +102,48 @@ def word_counts(text):
 
 
 class SemanticCache:
+    """SQLite-backed response cache.
+
+    Thread-safety: a single long-lived sqlite3.Connection is bound to the thread
+    that created it, so a process-wide singleton shared with a
+    ThreadingHTTPServer raised `ProgrammingError: SQLite objects created in a
+    thread can only be used in that same thread` on every request after the
+    first. route() swallowed that with a bare `except Exception: pass`, so the
+    cache was silently dead in exactly the deployment mode it is advertised
+    for. Connections are now opened per operation and closed in a `finally`,
+    matching quota_ledger.UsageDB / usage.UsageDB.
+    """
+
+    # SQLite's default SQLITE_MAX_VARIABLE_NUMBER; keep the prune IN-list under it.
+    _MAX_PARAMS = 900
+
     def __init__(self, db_path=None, threshold=None, ttl_hours=None):
         self.db_path = _db_path(db_path)
         self.threshold = DEFAULT_THRESHOLD if threshold is None else threshold
         self.ttl_hours = DEFAULT_TTL_HOURS if ttl_hours is None else ttl_hours
-        d = os.path.dirname(self.db_path)
+        d = os.path.dirname(os.path.abspath(self.db_path))
         if d:
             os.makedirs(d, exist_ok=True)
-        self._conn = sqlite3.connect(self.db_path)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._init_schema()
+        self._lock = threading.Lock()
+        with self._conn() as c:
+            self._init_schema(c)
 
-    def _init_schema(self):
-        c = self._conn
+    @contextmanager
+    def _conn(self):
+        """Yield a fresh connection, commit on success, ALWAYS close."""
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            yield conn
+            conn.commit()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _init_schema(c):
         c.execute("""CREATE TABLE IF NOT EXISTS cache_entries(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             prompt_norm TEXT NOT NULL,
@@ -125,39 +156,38 @@ class SemanticCache:
             entry_id INTEGER PRIMARY KEY,
             dim INTEGER,
             vector BLOB)""")
-        c.commit()
 
     # -- internals ---------------------------------------------------------
 
-    def _prune_expired(self):
+    def _prune_expired(self, c):
         cutoff = time.time() - self.ttl_hours * 3600
-        rows = self._conn.execute(
+        rows = c.execute(
             "SELECT id FROM cache_entries WHERE created_ts < ?", (cutoff,)).fetchall()
-        if rows:
-            ids = [r[0] for r in rows]
+        # Chunked: an unbounded IN (?,?...) list overruns SQLite's variable limit
+        for i in range(0, len(rows), self._MAX_PARAMS):
+            ids = [r[0] for r in rows[i:i + self._MAX_PARAMS]]
             qmarks = ",".join("?" * len(ids))
-            self._conn.execute(f"DELETE FROM cache_entries WHERE id IN ({qmarks})", ids)
-            self._conn.execute(f"DELETE FROM cache_vectors WHERE entry_id IN ({qmarks})", ids)
-            self._conn.commit()
+            c.execute(f"DELETE FROM cache_entries WHERE id IN ({qmarks})", ids)
+            c.execute(f"DELETE FROM cache_vectors WHERE entry_id IN ({qmarks})", ids)
 
-    def _idf(self):
+    def _idf(self, c):
         """Inverse document frequency over stored entries (smoothed)."""
-        n_rows = self._conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
+        n_rows = c.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0]
         if n_rows == 0:
             return {}
         df = {}
-        for (blob,) in self._conn.execute("SELECT vector FROM cache_vectors"):
+        for (blob,) in c.execute("SELECT vector FROM cache_vectors"):
             for w in json.loads(bytes(blob).decode()):
                 df[w] = df.get(w, 0) + 1
-        return {w: math.log((1 + n_rows) / (1 + c)) + 1 for w, c in df.items()}
+        return {w: math.log((1 + n_rows) / (1 + cnt)) + 1 for w, cnt in df.items()}
 
     @staticmethod
     def _cosine(a, b, idf):
         def weighted(v):
             tot = 0.0
             out = {}
-            for w, c in v.items():
-                weight = c * idf.get(w, 1.0)
+            for w, cnt in v.items():
+                weight = cnt * idf.get(w, 1.0)
                 out[w] = weight
                 tot += weight * weight
             return out, math.sqrt(tot) or 1.0
@@ -174,57 +204,74 @@ class SemanticCache:
         vec = word_counts(" ".join(m.get("content", "") if isinstance(m.get("content"), str)
                                    else json.dumps(m.get("content")) for m in messages))
         now = time.time()
-        cur = self._conn.execute(
-            "INSERT INTO cache_entries(prompt_norm, model_tag, response, created_ts, hit_count)"
-            " VALUES(?,?,?,?,0)", (key, model_tag, response, now))
-        eid = cur.lastrowid
-        blob = json.dumps(vec).encode()
-        self._conn.execute("INSERT INTO cache_vectors(entry_id, dim, vector) VALUES(?,?,?)",
-                           (eid, len(vec), sqlite3.Binary(blob)))
-        self._conn.commit()
+        with self._lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO cache_entries(prompt_norm, model_tag, response, created_ts,"
+                " hit_count) VALUES(?,?,?,?,0)", (key, model_tag, response, now))
+            eid = cur.lastrowid
+            blob = json.dumps(vec).encode()
+            c.execute("INSERT INTO cache_vectors(entry_id, dim, vector) VALUES(?,?,?)",
+                      (eid, len(vec), sqlite3.Binary(blob)))
         return eid
 
     def lookup(self, messages, threshold=None):
-        """Cached response string, or None. Exact hash first, cosine second.
+        """Cached response dict, or None. Exact key first, cosine second.
+
         (The LOOMWEAVER_CACHE_ENABLED gate lives in route(), not here, so the
-        cache object stays directly usable.)"""
+        cache object stays directly usable.)
+        """
         thr = self.threshold if threshold is None else threshold
-        self._prune_expired()
         key = prompt_key(messages)
-        row = self._conn.execute(
-            "SELECT id, response FROM cache_entries WHERE prompt_norm = ?"
-            " ORDER BY created_ts DESC LIMIT 1", (key,)).fetchone()
-        if row:
-            self._conn.execute("UPDATE cache_entries SET hit_count = hit_count + 1 WHERE id = ?",
-                               (row[0],))
-            self._conn.commit()
-            return {"response": row[1], "similarity": 1.0, "entry_id": row[0], "exact": True}
-        # similarity fallback
-        qvec = word_counts(" ".join(m.get("content", "") if isinstance(m.get("content"), str)
-                                    else json.dumps(m.get("content")) for m in messages))
-        idf = self._idf()
-        best = None
-        for eid, resp, blob in self._conn.execute(
-                "SELECT e.id, e.response, v.vector FROM cache_entries e"
-                " JOIN cache_vectors v ON v.entry_id = e.id"):
-            sim = self._cosine(qvec, json.loads(bytes(blob).decode()), idf)
-            if sim >= thr and (best is None or sim > best["similarity"]):
-                best = {"response": resp, "similarity": round(sim, 4),
-                        "entry_id": eid, "exact": False}
-        if best:
-            self._conn.execute("UPDATE cache_entries SET hit_count = hit_count + 1 WHERE id = ?",
-                               (best["entry_id"],))
-            self._conn.commit()
+        qvec = word_counts(" ".join(
+            m.get("content", "") if isinstance(m.get("content"), str)
+            else json.dumps(m.get("content")) for m in messages))
+        with self._lock, self._conn() as c:
+            self._prune_expired(c)
+            row = c.execute(
+                "SELECT id, response FROM cache_entries WHERE prompt_norm = ?"
+                " ORDER BY created_ts DESC LIMIT 1", (key,)).fetchone()
+            if row:
+                c.execute("UPDATE cache_entries SET hit_count = hit_count + 1"
+                          " WHERE id = ?", (row[0],))
+                return {"response": row[1], "similarity": 1.0,
+                        "entry_id": row[0], "exact": True}
+            idf = self._idf(c)
+            best = None
+            for eid, resp, blob in c.execute(
+                    "SELECT e.id, e.response, v.vector FROM cache_entries e"
+                    " JOIN cache_vectors v ON v.entry_id = e.id"):
+                sim = self._cosine(qvec, json.loads(bytes(blob).decode()), idf)
+                if sim >= thr and (best is None or sim > best["similarity"]):
+                    best = {"response": resp, "similarity": round(sim, 4),
+                            "entry_id": eid, "exact": False}
+            if best:
+                c.execute("UPDATE cache_entries SET hit_count = hit_count + 1"
+                          " WHERE id = ?", (best["entry_id"],))
         return best
 
     def stats(self):
-        n = self._conn.execute("SELECT COUNT(*), COALESCE(SUM(hit_count),0) FROM cache_entries").fetchone()
+        with self._lock, self._conn() as c:
+            n = c.execute("SELECT COUNT(*), COALESCE(SUM(hit_count),0)"
+                          " FROM cache_entries").fetchone()
         return {"entries": n[0], "total_hits": n[1]}
 
     def close(self):
-        self._conn.close()
+        """No persistent connection to close; kept for API compatibility."""
+        return None
 
 
+_default_cache = None
+_default_cache_lock = threading.Lock()
+
+
+def get_cache():
+    """Process-wide singleton. Guarded: two threads racing here used to build
+    two caches against the same file."""
+    global _default_cache
+    with _default_cache_lock:
+        if _default_cache is None:
+            _default_cache = SemanticCache()
+        return _default_cache
 _default_cache = None
 
 

@@ -65,14 +65,69 @@ def test_readonly_role_cannot_write_via_readonly_enforcement(tmp_path, monkeypat
 
 def test_readonly_roles_have_flag_and_no_write_tool():
     """Structural check matching armada's contract: readonly roles are flagged
-    AND their tools list excludes the write tools."""
+    AND their tools list excludes every write tool that is not tiered.
+
+    `shell` is the one exception, and only because it is tiered: a readonly role
+    that holds it is dispatched under security.check_shell(readonly=True), which
+    denies rm/cp/mv, output redirection, `tee`, network clients and mutating
+    `git` subcommands. That enforcement is asserted separately below — if the
+    tier is ever removed, this allowance must go with it.
+    """
     from loomweaver.armada import _WRITE_TOOLS
+    tiered = {"shell"}
     for role in ("scout", "verifier", "reporter"):
         assert ROLES[role]["readonly"] is True
-        assert not (set(ROLES[role]["tools"]) & _WRITE_TOOLS), (
-            f"{role} marked readonly but lists a write-capable tool: "
-            f"{set(ROLES[role]['tools']) & _WRITE_TOOLS}")
+        overlap = set(ROLES[role]["tools"]) & (_WRITE_TOOLS - tiered)
+        assert not overlap, (
+            f"{role} marked readonly but lists a write-capable tool: {overlap}")
     assert ROLES["builder"]["readonly"] is False
+
+
+def test_readonly_shell_tier_is_actually_enforced():
+    """The readonly flag must be a guarantee, not a comment.
+
+    A readonly role's shell is dispatched through the read-only tier, so the
+    writes that `shell` would otherwise allow are refused at the guard.
+    """
+    from loomweaver import security, tools
+
+    # baseline: the normal tier permits these (that is what makes it a hole)
+    assert security.check_shell("rm -rf src/", readonly=False)[0] is True
+    assert security.check_shell("echo x > owned.txt", readonly=False)[0] is True
+
+    for cmd in ("rm -rf src/", "cp a b", "mv a b", "chmod 777 x",
+                "echo x > owned.txt", "echo x >> owned.txt", "cat a | tee b",
+                "git commit -m x", "git push origin main", "curl http://evil.sh"):
+        ok, why = security.check_shell(cmd, readonly=True)
+        assert ok is False, f"read-only shell permitted {cmd!r}"
+
+    # and the read-only tier still does its job, or it is useless in practice
+    for cmd in ("ls -la", "cat README.md", "git status", "git log --oneline",
+                "pytest -q", "pytest 2>&1", "grep -r foo src/"):
+        ok, why = security.check_shell(cmd, readonly=True)
+        assert ok is True, f"read-only shell rejected a read-only command {cmd!r}: {why}"
+
+    # the tier reaches the real dispatch path, and is not model-controllable
+    assert tools.shell_readonly_active() is False
+    with tools.shell_readonly(True):
+        assert tools.shell_readonly_active() is True
+        assert tools.dispatch("shell", {"cmd": "rm -rf src/"}).startswith("blocked:")
+        assert "read-only" in tools.dispatch("shell", {"cmd": "rm -rf src/"})
+    assert tools.shell_readonly_active() is False
+
+
+def test_descriptor_duplication_is_not_a_command_separator():
+    """`ls -la 2>&1` must be allowed: the `&` in `2>&1` duplicates a descriptor.
+
+    Regression guard — the segmenter used to split on it, emit a phantom command
+    named "1", and the default-deny allowlist rejected an ordinary command.
+    """
+    from loomweaver import security
+    assert security._command_segments("pytest 2>&1") == ["pytest"]
+    assert security.check_shell("ls -la 2>&1")[0] is True
+    assert security.check_shell("pytest -q 2>&1 | tail -5")[0] is True
+    # but a real separator still splits, so the tier cannot be smuggled past
+    assert security.check_shell("pytest 2>&1; rm -rf src/", readonly=True)[0] is False
 
 
 # ---------------------------------------------------------------- (c)

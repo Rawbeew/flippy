@@ -22,3 +22,14 @@ tmp*/
 
 # internal security-audit artifacts (never committed)
 audits/
+
+# local scratch / experiment space — never a source directory
+sandbox/
+
+# coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+
+# self-learning memory: per-user runtime state, not source
+learning.db
