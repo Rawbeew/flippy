@@ -323,7 +323,7 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
 
         # Native tool call(s) from a native-tool provider (e.g. Groq gpt-oss).
         if r.get("tool_calls"):
-            calls = r["tool_calls"]
+            calls = r.get("tool_calls") or []
             runlog.emit({"type": "agent_tool_calls", "step": step,
                          "calls": [c["name"] for c in calls]})
             for c in calls:
@@ -348,16 +348,17 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
                 print(f"[step {step}] native tools: {[c['name'] for c in calls]}")
             continue  # loop again with the tool results in context
 
-        msg = {"role": "assistant", "content": r["text"]}
+        text = r.get("text") or ""
+        msg = {"role": "assistant", "content": text}
         sess["messages"].append(msg)
-        runlog.emit({"type": "agent_step", "step": step, "text": r["text"][:500],
-                     "provider": r["provider"]})
+        runlog.emit({"type": "agent_step", "step": step, "text": text[:500],
+                     "provider": r.get("provider")})
         if verbose:
             print(f"[step {step}] {r['provider']}: {r['text'][:160]}")
 
         # actions ride on the model's plain-text reply, parsed as JSON
         # (the JSON-protocol fallback; providers inline tool calls as text)
-        action = _parse_json_action(r["text"])
+        action = _parse_json_action(text)
         if action and action[0] == "done":
             final = action[1]
             runlog.emit({"type": "run_done", "step": step, "summary": final})
@@ -383,8 +384,8 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
                     continue
 
         # no explicit action: if text mentions DONE treat as done, else nudge
-        if "DONE:" in r["text"]:
-            final = r["text"].split("DONE:", 1)[1].strip()
+        if "DONE:" in text:
+            final = text.split("DONE:", 1)[1].strip()
             runlog.emit({"type": "run_done", "step": step, "summary": final})
             break
         nudges += 1
