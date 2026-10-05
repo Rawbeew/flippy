@@ -148,7 +148,7 @@ class QuotaLedger:
                     (provider,)).fetchone()
                 streak = (streak_row["fail_streak"] or 0) + 1
                 step = BACKOFF_STEPS[min(streak - 1, len(BACKOFF_STEPS) - 1)]
-                until = self._iso(now.fromtimestamp(
+                until = self._iso(datetime.fromtimestamp(
                     time.time() + min(step, BACKOFF_MAX), tz=timezone.utc))
                 c.execute(
                     "UPDATE quota_state SET cooldown_until=?, last_status=?, "

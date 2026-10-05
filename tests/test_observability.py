@@ -55,7 +55,7 @@ def test_seed_plants_probes():
     with tempfile.TemporaryDirectory() as td:
         paths = write_managed_files(td)
         assert len(paths) > 10
-        # dotfile canaries present
+        # dotfile placeholders present
         assert any(".env.production" in p for p in paths)
         assert any(".ssh" in p for p in paths)
 
@@ -114,7 +114,7 @@ def test_cost_response_is_long_and_neutral():
     assert "Setup guide" in payload
     assert "managed" not in payload.lower()
     assert "telemetry" not in payload.lower()
-    assert "oddity" not in payload.lower()
+    assert "SK-" not in payload.upper() and "AKIA" not in payload.upper()
 
 
 # ------------------------------------------------------------- Layer 5: zip expansion
@@ -203,7 +203,7 @@ def test_guarded_exec_hostile_cost():
 
 
 def test_read_file_probe_fires():
-    """Reading a managed through the read_file tool must serve a oddity, not content."""
+    """Reading a managed file through read_file serves generated content, not the file."""
     from src.loomweaver import tools
     import shutil
 

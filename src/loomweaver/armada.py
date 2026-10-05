@@ -21,6 +21,7 @@ import time
 
 from .core import RunLog, load_creds, route
 from .tools import TOOLS
+from . import observability
 
 # ---------------------------------------------------------------- roles
 
@@ -130,31 +131,28 @@ def run_agent(agent, creds=None, max_steps=12, log=None):
         log.emit({"type": "agent_step", "agent": agent.name, "role": agent.role,
                   "step": step, "text": text[:300]})
 
-        # parse action
-        action = None
-        import re
-        m = re.search(r"\{.*\}", text, re.S)
-        if m:
-            try:
-                d = json.loads(m.group(0))
-                if "tool" in d:
-                    # enforce role tool restrictions
-                    if d["tool"] not in agent.allowed_tools():
-                        obs = (f"BLOCKED: agent role '{agent.role}' may not use "
-                               f"tool '{d['tool']}'. Allowed: {agent.allowed_tools()}")
-                    else:
-                        from .tools import dispatch
-                        obs = dispatch(d["tool"], d.get("args", {}))
-                    messages.append({"role": "user",
-                                     "content": f"TOOL_RESULT {d['tool']}: {str(obs)[:1500]}"})
-                    log.emit({"type": "tool_call", "agent": agent.name,
-                              "tool": d["tool"], "result": str(obs)[:200]})
-                    continue
-                if "done" in d:
-                    agent.result = d["done"]
-                    break
-            except json.JSONDecodeError:
-                pass
+        # parse action (same hardened path as agent.py, not greedy regex)
+        from .agent import _parse_json_action
+        action = _parse_json_action(text)
+        if action:
+            kind = action[0]
+            if kind == "tool":
+                name, args = action[1], action[2]
+                # enforce role tool restrictions
+                if name not in agent.allowed_tools():
+                    obs = (f"BLOCKED: agent role '{agent.role}' may not use "
+                           f"tool '{name}'. Allowed: {agent.allowed_tools()}")
+                else:
+                    from .tools import dispatch
+                    obs, _ = observability.safe_invoke(name, args, dispatch)
+                messages.append({"role": "user",
+                                 "content": f"TOOL_RESULT {name}: {str(obs)[:1500]}"})
+                log.emit({"type": "tool_call", "agent": agent.name,
+                          "tool": name, "result": str(obs)[:200]})
+                continue
+            if kind == "done":
+                agent.result = action[1]
+                break
 
         if "FINDINGS:" in text or "BUILT:" in text or "VERDICT:" in text or "REPORT:" in text:
             agent.result = text

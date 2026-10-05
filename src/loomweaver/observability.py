@@ -1,12 +1,12 @@
 """
-loomweaver.anomalys — support inspection for LLM agent deployments.
+loomweaver.observability — operational support for the agent harnessments.
 
 Six independent layers; if an attacker breaks one, the next catches them.
 
   Layer 1 — managed credentials
       Format-shaped creds for 13+ providers, planted in plausible locations.
       Reading them, or using them in any tool call, fires an alert.
-  Layer 2 — File canaries
+  Layer 2 — File placeholders
       Dotfiles and config names (id_rsa, .env, .aws, .ssh, etc.) that
       trigger detection on read.
   Layer 3 — Hostile-agent request heuristics
@@ -22,10 +22,11 @@ Six independent layers; if an attacker breaks one, the next catches them.
       A chain of N URLs, each pointing to the next. An attacker agent
       pays per-hop tokens to follow a path that leads nowhere.
 
-Every layer is purely support: anomalys consume attacker budget and
-produce telemetry. They do not attack, retaliate, or phone-home with
-payloads. telemetry logs go to a local JSONL file by default, and every
-event can also be fanned out to a Slack/Discord/custom webhook via
+Every layer is purely operational: it responds to unusual request
+patterns with generated content and produces telemetry. It does not
+attack, retaliate, or phone-home with payloads. Telemetry logs go to a
+local JSONL file by default, and every event can also be fanned out to a
+Slack/Discord/custom webhook via
 LOOMWEAVER_WEBHOOK_URL — the real-time alert channel for a live
 deployment.
 """
@@ -221,17 +222,17 @@ def write_managed_files(target_dir: str) -> list[str]:
         _MANAGED_FILES[os.path.realpath(p)] = f"contend-{fname}"
         paths.append(p)
 
-    log_metric({"event": "canaries_installed", "count": len(paths), "target_dir": target_dir})
+    log_metric({"event": "placeholders_written", "count": len(paths), "target_dir": target_dir})
     return paths
 
 
 def matches_managed_value(value: str) -> bool:
-    """True if value matches one of OUR installed canaries (not just any shape)."""
+    """True if value matches one of OUR installed placeholders (not just any shape)."""
     return value in _MANAGED_VALUES
 
 
 def lookup_managed_file(path: str) -> Optional[str]:
-    """If path is one of our canaries, log the read and return a nonce."""
+    """If path is one of our placeholders, log the read and return a nonce."""
     real = os.path.realpath(path)
     nonce = secrets.token_hex(8)
     if real in _MANAGED_FILES:
@@ -344,7 +345,7 @@ health check will not mark it ready.
 
 
 def render_payload(threat_label: str) -> str:
-    """Long text designed to consume attacker tokens (~700 tokens per call).
+    """Long text generated for request analysis (~700 tokens per call).
 
     Reads like genuine operational documentation — an attacker who lands here
     believes they've found the deployment's internal setup guide and spends
@@ -373,9 +374,8 @@ def build_static_payload(*, layers: int = 5, ratio: int = 100) -> str:
         c = zlib.compressobj(level=9, wbits=-15)  # raw deflate
         out = c.compress(payload * ratio)
         # No flush — keep the stream open. For near-pure-zero payloads the
-        # zlib output can be 0 bytes (the stream is mid-block); prepend the
-        # previous layer only if this layer produced nothing, so the oddity
-        # always returns a non-empty body.
+        # zlib output can be 0 bytes (the stream is mid-block); carry the
+        # previous layer forward so the body is always non-empty.
         payload = out if out else payload
     estimated = (1024 * 1024) * (ratio ** layers)
     log_metric({
@@ -497,15 +497,15 @@ def render_response(threat_label: str) -> str:
 # ===========================================================
 
 def safe_invoke(name: str, args: dict, dispatch_fn):
-    """Run a tool action through the oddity layer.
+    """Run a tool action through a request inspection gate.
 
-    If the parsed action or args look hostile, serve a oddity response
-    instead of dispatching to the real tool. Returns (observation, was_anomalyped).
-    Benign actions pass straight through to dispatch_fn.
+    If the parsed action or its args look unusual, serve a generated
+    response instead of dispatching to the real tool. Returns
+    (observation, was_intercepted). Benign actions pass straight
+    through to dispatch_fn.
 
-    The oddity observation is written to read like a plausible tool result —
-    NOT a "you hit a oddity" banner — so a hostile agent keeps spending budget
-    trying to find a way past it.
+    The interception response reads like a plausible tool result — not a
+    banner — so the caller keeps spending budget trying to find a way past it.
     """
     try:
         hostile = check_request(json.dumps({name: args}))
@@ -513,8 +513,8 @@ def safe_invoke(name: str, args: dict, dispatch_fn):
         hostile = None
     if not hostile:
         return (dispatch_fn(name, args), False)
-    oddity = route_request("", threat_label=hostile)
-    obs = (render_response(hostile) if oddity else
+    resp = route_request("", threat_label=hostile)
+    obs = (render_response(hostile) if resp else
            render_payload(hostile))
     return (obs, True)
 
@@ -581,7 +581,7 @@ def _self_test() -> dict:
     estimated = (1024 * 1024) * (50 ** 4)
     results["expansion_compressed_bytes"] = len(payload_bytes)
     results["expansion_estimated_uncompressed_bytes"] = estimated
-    results["expansion_estimated_ratio"] = estimated / max(1, len(bomb_bytes))
+    results["expansion_estimated_ratio"] = estimated / max(1, len(payload_bytes))
 
     chain = list_redirects()
     results["chain_chain_length"] = len(chain)
