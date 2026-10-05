@@ -5,10 +5,10 @@ provider, and if that provider is slow, full, or broken, it moves on to the next
 one. You get an answer either way.
 
 It works with the free plans that most providers offer. It needs no extra
-packages to run the core. It has 659 tests. No one has run it in production yet.
+packages to run the core. It has 691 tests. No one has run it in production yet.
 
 [![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-659%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-691%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -328,7 +328,7 @@ export OPENROUTER_KEY=sk-or-...
 python src/ai_failover.py "explain KV caches in one paragraph"   # chat with failover
 python -m src.loomweaver agent "check disk space using the shell tool"
 python -m src.loomweaver doctor   # check your config before your first real call
-pip install pytest && python -m pytest tests/ -q                  # 659 tests
+pip install pytest && python -m pytest tests/ -q                  # 691 tests
 ```
 
 ## Docker
