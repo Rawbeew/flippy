@@ -113,7 +113,7 @@ class TestContextDeterminedTools:
 
     def test_explicit_and_all_modes(self):
         from loomweaver import agent
-        assert len(agent._tools_for_goal("x", "all")) == 9          # legacy full set
+        assert agent._tools_for_goal("x", "all") == set(agent.tools.TOOLS)  # all real tools          # legacy full set
         assert agent._tools_for_goal("x", ["shell", "read_file"]) == {"shell", "read_file"}
         assert "shell" in agent._tools_for_goal("x", ["shell"])
 

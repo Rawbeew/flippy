@@ -225,7 +225,28 @@ def rag_query(q, top_k=3):
 
 # ---------- TTS (edge-tts, no key needed; Groq orpheus if set) ----------
 def tts(text, outpath=None):
-    outpath = outpath or os.path.join(os.path.expanduser("~"), "tts.mp3")
+    # zero-trust write guard: only ever write under the user's home TTS dir,
+    # unless the operator explicitly opts into arbitrary paths. Refuse anything
+    # that could overwrite a sensitive/absolute/traversing target. (aihub is
+    # CLI-only today; this bounds a future agent-tool exposure too.)
+    home = os.path.expanduser("~")
+    tts_dir = os.path.join(home, "aihub_tts")
+    os.makedirs(tts_dir, exist_ok=True)
+    if outpath is None:
+        outpath = os.path.join(tts_dir, "tts.mp3")
+    elif os.environ.get("AIHUB_ALLOW_ARBITRARY_OUTPATH") != "1":
+        ap = os.path.abspath(outpath)
+        # STRICTLY under the dedicated TTS dir. No loose "under home" clause:
+        # abspath("../../root.mp3") resolves inside home and would otherwise be
+        # allowed as an arbitrary write. Only ~/aihub_tts (and basename-matches
+        # there) are in scope.
+        tts_abs = os.path.abspath(tts_dir)
+        if not (ap == os.path.join(tts_abs, os.path.basename(outpath))
+                or ap.startswith(tts_abs + os.sep)):
+            raise ValueError(
+                "refusing tts outpath outside ~/aihub_tts: use "
+                "AIHUB_ALLOW_ARBITRARY_OUTPATH=1 to allow arbitrary writes "
+                "(not recommended)")
     try:
         import edge_tts, asyncio
         async def _run():

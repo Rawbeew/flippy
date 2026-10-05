@@ -86,6 +86,9 @@ def _parse_json_action(text):
 
 
 SAFE_TOOLS = ("read_file", "list_dir", "remember", "http_get")  # always available
+# aihub capabilities are intent-gated (not in SAFE_TOOLS) so least privilege holds:
+# a goal that doesn't mention summarizing / speech / retrieval / embeddings never
+# gets those tools handed to it.
 
 # intent keyword -> tools the goal most plausibly needs. Context determines
 # the tool set (least privilege): a model working toward "summarize file X"
@@ -103,6 +106,11 @@ _INTENT = {
     "json": ("json", "transform", "filter the list", "map"),
     "http_get": ("url", "http", "https", "fetch", "website", "web page", "api",
                  "scrape", "feed", "html", "curl ", "wget", "download"),
+    "tts": ("speech", "text to speech", "tts", "audio", "say", "read aloud", "synthesize voice", "voice"),
+    "rag_query": ("rag", "retrieval", "vector store", "indexed", "search the knowledge", "knowledge base"),
+    "rag_add": ("rag add", "add to rag", "index a", "store in the vector", "save to the knowledge base", "remember a fact into the store"),
+    "summarize": ("summarize", "summary", "condense", "tl;dr", "tl;dr:", "brief"),
+    "embed": ("embedding", "embed ", "vector for"),
     "write": ("write ", "create ", "generate ", "save ", "append ", "update file",
               "output to", "produce a file", "new file", "edit "),
 }

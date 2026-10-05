@@ -128,3 +128,35 @@ class TestRedactSecretsUnit:
 
     def test_plain_text_passthrough(self):
         assert aihub._redact_secrets("benign message") == "benign message"
+
+    # ---------- zero-trust: bound tts outpath to home unless operator opts out ----------
+    def _call_tts_guard(self, outpath):
+        """Call aihub.tts with an outpath and return whatever exception the
+        write-guard raised (ValueError) OR None if it passed the guard. Network /
+        'unavailable' RuntimeError after a passing guard is not a guard failure."""
+        try:
+            aihub.tts("hi", outpath=outpath)
+            return None
+        except ValueError as e:
+            return e
+        except RuntimeError:
+            return None
+
+    def test_tts_outpath_guarded_against_traversal(self):
+        import os
+        for bad in ["C:/Windows/system32/evil.mp3", "/etc/evil.mp3",
+                    os.path.join("..", "..", "root.mp3")]:
+            exc = self._call_tts_guard(bad)
+            assert isinstance(exc, ValueError), f"unsafe outpath not refused: {bad} ({exc!r})"
+
+    def test_tts_outpath_default_is_safe_home_dir(self):
+        exc = self._call_tts_guard(None)
+        assert not isinstance(exc, ValueError)
+
+    def test_tts_outpath_opt_in_required_for_arbitrary(self, monkeypatch):
+        exc = self._call_tts_guard("C:/Windows/Temp/x.mp3")
+        assert isinstance(exc, ValueError), f"expected ValueError without opt-in, got {exc!r}"
+        monkeypatch.setenv("AIHUB_ALLOW_ARBITRARY_OUTPATH", "1")
+        exc = self._call_tts_guard("C:/Windows/Temp/x.mp3")
+        assert not isinstance(exc, ValueError), "opt-in should pass the write guard"
+

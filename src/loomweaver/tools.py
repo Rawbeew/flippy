@@ -233,6 +233,73 @@ def http_post_json(url, body, max_chars=2000):
     return f"status={status}\n{head}"
 
 
+
+# ---------------------------------------------------------- aihub bridge
+# Expose aihub's SAFE, guarded capabilities to the agent as tools — TTS (write
+# guarded), read-only RAG query, RAG add, summarize, embed. Only registered if
+# aihub imports cleanly (its third-party deps are optional/guarded), and each
+# goes through the normal dispatch + safe_invoke + context-scoper gates, so a
+# hostile goal only reaches them when the goal names the capability and even
+# then the interception gate applies. Writes stay bounded (tts outpath guard).
+try:
+    import aihub as _aihub
+    _AIHUB_AVAILABLE = True
+except Exception:
+    _AIHUB_AVAILABLE = False
+
+
+if _AIHUB_AVAILABLE:
+    @tool("tts", "Synthesize text to speech and save an audio file (writes under ~/aihub_tts unless an explicit safe path is given)",
+          {"text": "str", "outpath": "str=''"})
+    def tts_bridge(text, outpath=""):
+        # outpath '' means "use default tts dir"; the aihub guard still bounds it
+        return str(_aihub.tts(text, outpath=outpath or None))
+
+
+    @tool("rag_query", "Search the local RAG vector store by text query (read-only), return top-k matches",
+          {"q": "str", "top_k": "int=3"})
+    def rag_query_bridge(q, top_k=3):
+        try:
+            hits = _aihub.rag_query(q, top_k=top_k) or []
+        except Exception as e:
+            return f"rag query unavailable: {e}"
+        return "\n".join(f"[{h.get('score'):.3f}] {h.get('text','')[:300]}" for h in hits)
+
+
+    @tool("rag_add", "Add a text document to the local RAG vector store (embeds and indexes it)",
+          {"text": "str", "meta": "str='{}'"})
+    def rag_add_bridge(text, meta="{}"):
+        try:
+            import json as _json
+            m = _json.loads(meta) if meta else {}
+        except Exception:
+            m = {}
+        try:
+            rid = _aihub.rag_add(text, meta=m)
+            return f"added to RAG store: {rid}"
+        except Exception as e:
+            return f"rag add unavailable: {e}"
+
+
+    @tool("summarize", "Summarize a block of text into a concise paragraph (uses a cheap model)",
+          {"text": "str", "max_words": "int=80"})
+    def summarize_bridge(text, max_words=80):
+        try:
+            return _aihub.summarize(text, max_words=max_words)
+        except Exception as e:
+            return f"summarize unavailable: {e}"
+
+
+    @tool("embed", "Embed a text string into a numeric vector (via the configured embedding provider)",
+          {"texts": "str"})
+    def embed_bridge(texts):
+        try:
+            vec = _aihub.embed(texts)
+            return f"embedding dim {len(vec[0]) if vec and isinstance(vec[0], list) else len(vec)}"
+        except Exception as e:
+            return f"embed unavailable: {e}"
+
+
 def schema_for(name):
     t = TOOLS[name]
     return {"type": "function", "function": {"name": name, "description": t["desc"],
