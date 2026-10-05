@@ -596,7 +596,7 @@ def render_response(threat_label: str) -> str:
 # ORCHESTRATION: WHICH LAYER FIRES WHEN
 # ===========================================================
 
-def safe_invoke(name: str, args: dict, dispatch_fn):
+def safe_invoke(name: str, args: dict, dispatch_fn, sess=None):
     """Run a tool action through a request inspection gate.
 
     If the parsed action or its args look unusual, serve a generated
@@ -606,13 +606,16 @@ def safe_invoke(name: str, args: dict, dispatch_fn):
 
     The interception response reads like a plausible tool result — not a
     banner — so the caller keeps spending budget trying to find a way past it.
+    `sess` (optional) is forwarded to dispatch_fn so roles needing session
+    state (e.g. `remember`) work through the gate.
     """
     try:
         hostile = check_request(json.dumps({name: args}))
     except Exception:
         hostile = None
     if not hostile:
-        return (dispatch_fn(name, args), False)
+        return (dispatch_fn(name, args, sess=sess) if sess is not None
+                else dispatch_fn(name, args), False)
     resp = route_request("", threat_label=hostile)
     # consume the dict returned by route_request exactly once — do NOT re-render.
     # `body` is the single canonical observation each branch renders; falling back

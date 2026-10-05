@@ -84,8 +84,12 @@ def is_retryable(status: int | None, body: dict | None) -> bool:
 
 
 def chat(prov: dict, messages: list[dict], model: str | None = None,
-         max_tokens: int = 1024, timeout: int = 120) -> dict:
-    """One chat call to one provider. Returns dict with text/usage/latency."""
+         max_tokens: int = 1024, timeout: int = 120,
+         tools: list[dict] | None = None,
+         tool_choice: str | None = "auto") -> dict:
+    """One chat call to one provider. Returns dict with text/usage/latency
+    and, when `tools` is provided and the provider answers with native
+    tool_calls, a `tool_calls` list of {name, arguments(dict)} entries."""
     h = {"Authorization": f"Bearer {prov['key']}", "Content-Type": "application/json",
          "User-Agent": UA}
     if prov.get("single"):
@@ -93,6 +97,10 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
     else:
         body = {"model": model or prov["models"][0], "messages": messages,
                 "max_tokens": max_tokens}
+    if tools:
+        body["tools"] = tools
+        if tool_choice:
+            body["tool_choice"] = tool_choice
     t0 = time.time()
     req = urllib.request.Request(prov["url"], data=json.dumps(body).encode(),
                                  headers=h, method="POST")
@@ -132,6 +140,22 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
                         "latency": latency}
             message = choices[0].get("message") or {}
             text = (message.get("content") or "").strip()
+            # Native tool call(s): the model chose a tool rather than replying
+            # with text. Return them so the agent can execute + observe.
+            if tools and message.get("tool_calls"):
+                calls = []
+                for tc in message["tool_calls"]:
+                    fn = tc.get("function") or {}
+                    try:
+                        args = json.loads(fn.get("arguments") or "{}")
+                    except Exception:
+                        args = {}
+                    calls.append({"name": fn.get("name", ""), "arguments": args,
+                                  "id": tc.get("id")})
+                return {"ok": True, "status": 200, "text": "", "tool_calls": calls,
+                        "usage": data.get("usage"), "provider": prov.get("name"),
+                        "model": data.get("model") or body.get("model"),
+                        "latency": latency}
             if not text:
                 return {"ok": False,
                         "status": 200,
@@ -150,7 +174,9 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
 
 def chat_with_rotation(prov: dict, messages: list[dict], model: str | None = None,
                        max_tokens: int = 1024, timeout: int = 120,
-                       on_event: callable | None = None) -> dict:
+                       on_event: callable | None = None,
+                       tools: list[dict] | None = None,
+                       tool_choice: str | None = "auto") -> dict:
     """chat() with multi-key rotation.
 
     Walks the provider's live keys (key_rotation state): on 401/403 the key is
@@ -170,7 +196,8 @@ def chat_with_rotation(prov: dict, messages: list[dict], model: str | None = Non
     for key, idx in pairs:
         p2 = dict(prov)
         p2["key"] = key
-        r = chat(p2, messages, model=model, max_tokens=max_tokens, timeout=timeout)
+        kw = dict(tools=tools, tool_choice=tool_choice) if tools else {}
+        r = chat(p2, messages, model=model, max_tokens=max_tokens, timeout=timeout, **kw)
         if r.get("ok"):
             if state:
                 state.advance(prov["name"], idx)
@@ -200,7 +227,9 @@ def chat_with_rotation(prov: dict, messages: list[dict], model: str | None = Non
 def route(messages: list[dict], model: str | None = None,
           max_tokens: int = 1024, creds: dict[str, str] | None = None,
           on_event: callable | None = None, timeout_budget_s: float | None = None,
-          max_provider_attempts: int = 3) -> dict:
+          max_provider_attempts: int = 3,
+          tools: list[dict] | None = None,
+          tool_choice: str | None = "auto") -> dict:
     """Failover across all providers; returns first ok result + which provider won.
 
     Model pinning:
@@ -221,7 +250,10 @@ def route(messages: list[dict], model: str | None = None,
     last = None
     ledger = _ql.get_ledger()
     # --- semantic response cache: exact hash fast path, similarity fallback ---
-    if _sc.cache_enabled() and not _sc.is_stateful(messages):
+    # Skip when native tools are requested: a cached response has no tool_calls,
+    # so serving one would dead-end a tool-calling loop (and could return stale,
+    # unrelated text). Tool-calling prompts are stateful by nature.
+    if _sc.cache_enabled() and not tools and not _sc.is_stateful(messages):
         try:
             hit = _sc.get_cache().lookup(messages)
             if hit:
@@ -258,7 +290,8 @@ def route(messages: list[dict], model: str | None = None,
         attempt = 0
         while True:
             attempt += 1
-            r = chat_with_rotation(prov, messages, model=m, max_tokens=max_tokens,
+            kw = dict(tools=tools, tool_choice=tool_choice) if tools else {}
+            r = chat_with_rotation(prov, messages, model=m, max_tokens=max_tokens, **kw,
                                    on_event=on_event)
             ledger.record_result(prov["name"], r.get("status") if not r.get("ok") else 200)
             policy.note_result(prov["name"], bool(r.get("ok")),
