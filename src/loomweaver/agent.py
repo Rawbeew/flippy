@@ -164,6 +164,10 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
                          "calls": [c["name"] for c in calls]})
             for c in calls:
                 name, args = c["name"], c["arguments"] or {}
+                if not isinstance(args, dict):
+                    # malformed/weird native arguments (e.g. a JSON array) — treat
+                    # as empty so dispatch never sees a non-dict it can't unpack.
+                    args = {}
                 obs, intercepted = observability.safe_invoke(name, args, tools.dispatch, sess=sess)
                 if len(obs) > OBS_TRUNC:
                     obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"

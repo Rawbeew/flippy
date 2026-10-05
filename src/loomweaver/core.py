@@ -36,6 +36,22 @@ CREDS_PATH = os.environ.get(
     )
 )
 UA = "flippy/0.1.0 (github.com/Rawbeew/flippy)"
+import re as _re
+
+# Defense-in-depth: never let a raw provider error body reach a caller (log or
+# HTTP client) containing something that looks like a credential. Lightweight
+# scrub of common key shapes; tools.redact owns the full family list — this is
+# the boundary that must not echo secrets even if a provider embeds one in an
+# error message.
+_ERR_RE = _re.compile(
+    r"(?i)(sk-|gsk_|nvapi-|cfut_|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|"
+    r"xox[baprs]-|rk_live_|rk_test_|sk_live_|sk_test_|AKIA[0-9A-Z]{16}|"
+    r"ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}|hf_[A-Za-z0-9]{20,}|"
+    r"xai-[A-Za-z0-9]{20,})[A-Za-z0-9_\-]{6,}")
+def scrub_error(body: str) -> str:
+    """Redact credential-shaped tokens from a provider error body string."""
+    return _ERR_RE.sub("[REDACTED]", body) if body else body
+
 
 
 # ---------------------------------------------------------------- credentials
@@ -125,7 +141,7 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
     latency = time.time() - t0
     if status != 200:
         return {"ok": False, "status": status, "retryable": is_retryable(status, data),
-                "error": json.dumps(data)[:300], "latency": latency}
+                "error": scrub_error(json.dumps(data))[:300], "latency": latency}
     if prov.get("single"):
         text = data.get("result", {}).get("response", "")
     else:

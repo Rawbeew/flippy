@@ -153,9 +153,30 @@ class Handler(BaseHTTPRequestHandler):
             def on_event(ev):
                 route_on_event(ev)
 
+            # Accept native tools from the client so the persistent endpoint
+            # can drive the agent's tool-calling path over HTTP.
+            req_tools = req.get("tools")
             r = core.route(messages, model=req.get("model"),
                            max_tokens=int(req.get("max_tokens") or 1024),
-                           creds=creds, on_event=on_event)
+                           creds=creds, on_event=on_event, tools=req_tools)
+            # Surface native tool_calls back to the client if the provider made one.
+            if r.get("ok") and r.get("tool_calls"):
+                return self._send(200, {
+                    "id": f"chatcmpl-flippy-{int(time.time() * 1000)}",
+                    "object": "chat.completion",
+                    "model": r.get("model") or "",
+                    "provider": r.get("provider"),
+                    "choices": [{"index": 0, "finish_reason": "tool_calls",
+                                 "message": {"role": "assistant",
+                                             "content": r.get("text") or "",
+                                             "tool_calls": [
+                                                 {"id": c.get("id", ""),
+                                                  "type": "function",
+                                                  "function": {
+                                                      "name": c["name"],
+                                                      "arguments": json.dumps(c.get("arguments") or {})}}
+                                                 for c in r["tool_calls"]]}}],
+                })
             if not r.get("ok"):
                 return self._send(502, {
                     "error": {"message": r.get("error", "all providers failed"),

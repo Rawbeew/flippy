@@ -19,3 +19,6 @@ telemetry*.log*
 
 .wrangler/
 tmp*/
+
+# internal security-audit artifacts (never committed)
+audits/
