@@ -85,7 +85,85 @@ def _parse_json_action(text):
     return None
 
 
+SAFE_TOOLS = ("read_file", "list_dir", "remember", "http_get")  # always available
+
+# intent keyword -> tools the goal most plausibly needs. Context determines
+# the tool set (least privilege): a model working toward "summarize file X"
+# should NOT be handed shell / sql / write / http-post unless the goal names it.
+_INTENT = {
+    # shell is the high-risk one — require a strong signal
+    "shell": ("shell", "execute", "run the ", "run a ", "command", "bash", "terminal",
+              "ls ", "grep ", "find ", "git ", "pip ", "python -", "install", "node ",
+              "npm", "cd ", "mkdir", "touch", "chmod", "psql", "awk", "sed",
+              "starts with a shell", "in a shell", "exec "),
+    "http_post": ("post", "submit to", "api key", "send data", "upload to",
+                  "http_post_json", "webhook", "transaction to"),
+    "sql": ("sqlite", " database", " database=", "db", " table ", "query ", "select ",
+            "sql", "rows", "schema", "where ", "join "),
+    "json": ("json", "transform", "filter the list", "map"),
+    "http_get": ("url", "http", "https", "fetch", "website", "web page", "api",
+                 "scrape", "feed", "html", "curl ", "wget", "download"),
+    "write": ("write ", "create ", "generate ", "save ", "append ", "update file",
+              "output to", "produce a file", "new file", "edit "),
+}
+
+
+def _tools_for_goal(goal: str | None, mode: str = "auto") -> set[str]:
+    """Pick the minimal tool set a goal needs.
+
+    mode:
+      "all"            -> every tool (legacy/opt-out)
+      ["tool", ...]    -> exactly that set
+      "auto" (default) -> SAFE_TOOLS plus whichever intent groups the goal names
+    Returns the subset of `set(tools.TOOLS)`.
+    """
+    if not goal or mode == "all":
+        return set(tools.TOOLS)
+    if isinstance(mode, (list, tuple, set)):
+        allowed = set(mode) & set(tools.TOOLS)
+        if allowed:  # explicit list wins
+            return allowed
+    gl = " " + (goal or "").lower() + " "
+    extra = set()
+    for tool, kws in _INTENT.items():
+        for kw in kws:
+            if kw in gl:
+                extra.add(tool)
+    # http_get is already safe; if goal names web intent, keep it (else it's in SAFE_TOOLS anyway)
+    return set(SAFE_TOOLS) | extra
+
+
+def _native_schemas_for(goal: str, mode: str = "auto"):
+    """Like _native_schemas() but only shapes for the context-determined tools."""
+    return [_native_schema(name) for name in tools.TOOLS if name in _tools_for_goal(goal, mode)]
+
+
+def _native_schema(name: str):
+    """Build a single OpenAI function schema for one tool by name."""
+    spec = tools.TOOLS[name]
+    props, req = {}, []
+    for pname, ptype in (spec.get("params") or {}).items():
+        base = ptype.split("=")[0].strip()
+        t = {"str": "string", "int": "integer", "float": "number",
+             "bool": "boolean"}.get(base, "string")
+        d = {"type": t, "description": ""}
+        if ptype.startswith("dict"):
+            d["type"] = "object"
+        default = ptype.split("=", 1)[1].strip() if "=" in ptype else ""
+        if default:
+            d["description"] = f"optional, default {default}"
+        props[pname] = d
+        if "=" not in ptype:
+            req.append(pname)
+    return {"type": "function",
+            "function": {"name": name, "description": spec.get("desc", ""),
+                         "parameters": {"type": "object", "properties": props,
+                                        "required": req,
+                                        "additionalProperties": False}}}
+
+
 def _native_schemas():
+    """Legacy: schemas for EVERY tool (used when tool_scope="all")."""
     """Convert tools.TOOLS into OpenAI tool-call JSON schemas (native path).
 
     Tool names keep their underscores (safe_invoke dispatches on the exact
@@ -126,7 +204,9 @@ NUDGE_MAX = 2     # consecutive no-progress nudges before we stop the run
 
 
 def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=None, verbose=True,
-        native_tools=True):
+        native_tools=True, tool_scope="auto"):
+    """tool_scope: 'auto' (context-determined minimal set), 'all' (every tool),
+    or an explicit list of tool names to force exactly that set."""
     runlog = RunLog(runs_dir)
     store = SessionStore()
     sess = store.load(session_id or "default")
@@ -134,12 +214,17 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         sess["messages"].append({"role": "system", "content": SYSTEM})
     sess["messages"].append({"role": "user", "content": f"GOAL: {goal}"})
 
-    # Build native tool schemas once (only if requested). Handled tool_calls
-    # append a "tool" role result message back into the transcript, which is
-    # what native-tool providers expect between turns.
-    native_schemas = _native_schemas() if native_tools else None
+    # Build native tool schemas once (only if requested). Context determines
+    # which tools the goal gets (least privilege): only the tools the goal
+    # plausibly needs are exposed, so a prompt-injected goal has a smaller
+    # dangerous-tool surface. tool_scope="all" disables the filter.
+    if native_tools:
+        native_schemas = _native_schemas_for(goal, tool_scope) if tool_scope != "all"             else _native_schemas()
+    else:
+        native_schemas = None
 
-    tool_list = ", ".join(tools.TOOLS)
+    chosen = _tools_for_goal(goal, tool_scope)
+    tool_list = ", ".join(sorted(chosen & set(tools.TOOLS)))
     sess["messages"].append({"role": "user", "content":
         f"AVAILABLE TOOLS: {tool_list}\n"
         'To use one, reply with ONLY JSON: {"tool": "<name>", "args": {...}}. '

@@ -88,3 +88,38 @@ class TestServerToolPassthrough:
         assert 'tools=req_tools' in src
         assert 'r.get("tool_calls")' in src
         assert 'finish_reason": "tool_calls' in src
+
+# ---------------------------------------------------------------- context determines tools
+class TestContextDeterminedTools:
+    def test_read_goal_gets_no_dangerous_tools(self):
+        from loomweaver import agent
+        to = agent._tools_for_goal("Summarize the README file", "auto")
+        assert "shell" not in to
+        assert "sql" not in to
+        assert "write" not in to
+        assert "read_file" in to and "list_dir" in to
+
+    def test_shell_only_on_shell_intent(self):
+        from loomweaver import agent
+        assert "shell" in agent._tools_for_goal("Use the shell to list files", "auto")
+        assert "shell" not in agent._tools_for_goal("Query the sqlite database", "auto")
+
+    def test_dangerous_tools_tracked_by_intent(self):
+        from loomweaver import agent
+        # a write goal gets write; an api goal gets http; a db goal gets sql
+        assert "write" in agent._tools_for_goal("Write a report to out.md", "auto")
+        assert "sql" in agent._tools_for_goal("Query the users table", "auto")
+        assert "http_post" in agent._tools_for_goal("POST the data to the api key endpoint", "auto")
+
+    def test_explicit_and_all_modes(self):
+        from loomweaver import agent
+        assert len(agent._tools_for_goal("x", "all")) == 9          # legacy full set
+        assert agent._tools_for_goal("x", ["shell", "read_file"]) == {"shell", "read_file"}
+        assert "shell" in agent._tools_for_goal("x", ["shell"])
+
+    def test_native_schemas_respect_the_filter(self):
+        from loomweaver import agent
+        names = [x["function"]["name"] for x in agent._native_schemas_for(
+            "Use the shell to list files", "auto")]
+        assert "shell" in names and "sql" not in names
+
