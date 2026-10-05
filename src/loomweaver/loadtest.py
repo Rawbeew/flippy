@@ -41,12 +41,17 @@ def run(provider=None, concurrency=4, requests=8, prompt="Write a 100-word story
             runlog.emit({"type": "loadtest_req", "provider": prov["name"], **res})
 
     oks = [r for r in results if r["ok"]]
+    # Latencies are rounded to 3dp, so a fast local provider (Ollama, LM Studio,
+    # a cached reply) can legitimately total 0.0. Guard the division rather than
+    # letting the whole loadtest crash on a ZeroDivisionError.
+    total_latency = sum(r["latency"] for r in oks)
     summary = {
         "provider": prov["name"], "requests": requests, "concurrency": concurrency,
         "success": len(oks), "fail": len(results) - len(oks),
         "latency_p50": round(statistics.median([r["latency"] for r in oks]), 2) if oks else None,
         "latency_max": round(max(r["latency"] for r in oks), 2) if oks else None,
-        "throughput_rps": round(len(oks) / sum(r["latency"] for r in oks) * concurrency, 2) if oks else 0,
+        "throughput_rps": round(len(oks) / total_latency * concurrency, 2)
+        if oks and total_latency > 0 else 0,
         "avg_tps": round(statistics.mean([r["tps"] for r in oks]), 1) if oks else 0,
     }
     runlog.emit({"type": "loadtest_summary", **summary})
