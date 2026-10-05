@@ -1,6 +1,5 @@
 """loadtest.py — inference harness: concurrency, TTFT/TPS, provider comparison."""
 import concurrent.futures
-import json
 import statistics
 import time
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 import json
 import os
-import re
 import threading
 import time
 import urllib.error
@@ -262,7 +261,7 @@ def route(messages: list[dict], model: str | None = None,
             r = chat_with_rotation(prov, messages, model=m, max_tokens=max_tokens,
                                    on_event=on_event)
             ledger.record_result(prov["name"], r.get("status") if not r.get("ok") else 200)
-            cooldown = policy.note_result(prov["name"], bool(r.get("ok")),
+            policy.note_result(prov["name"], bool(r.get("ok")),
                                            r.get("latency", 0.0))
             if on_event:
                 on_event({"type": "llm_call", "provider": prov["name"], "model": m,

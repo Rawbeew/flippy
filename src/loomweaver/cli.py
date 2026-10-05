@@ -2,7 +2,6 @@
 import argparse
 import json
 import os
-import sys
 
 from . import __version__, agent, evals, loadtest
 from .core import build_providers, load_creds

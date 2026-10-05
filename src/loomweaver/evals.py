@@ -3,7 +3,7 @@ import json
 import re
 import time
 
-from .core import RunLog, load_creds, route
+from .core import RunLog, route
 
 # ---------------------------------------------------------------- suites
 

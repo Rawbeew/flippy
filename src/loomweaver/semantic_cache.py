@@ -12,7 +12,6 @@ Lookup order:
 TTL: entries older than CACHE_TTL_HOURS (default 168 = 1 week) are ignored
 and pruned on access.
 """
-import hashlib
 import json
 import math
 import os

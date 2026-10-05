@@ -23,20 +23,11 @@ both as `python -m src.loomweaver` (CI) and `python -m loomweaver` (src/).
 """
 from __future__ import annotations
 
-import json
-import math
 import os
 import random
 import re
 import threading
 import time
-
-try:
-    from . import usage as _usage
-except ImportError:
-    import sys as _sys
-    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-    from loomweaver import usage as _usage
 
 
 # ---------------------------------------------------------------- stats
