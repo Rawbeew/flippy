@@ -416,8 +416,17 @@ def v_test_suite():
                                "_MODELS")))}
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
                        capture_output=True, text=True, cwd=ROOT, env=env)
-    tail = (r.stdout or "").strip().splitlines()[-1] if r.stdout else ""
-    check("full test suite is green", r.returncode == 0 and "failed" not in tail, tail)
+    lines = (r.stdout or "").strip().splitlines()
+    tail = lines[-1] if lines else ""
+    if r.returncode != 0 or "failed" in tail:
+        # Naming the failures matters more than the summary line: without this
+        # a red run here says only "not green" and you have to go re-run it.
+        named = [l.strip() for l in lines if l.startswith("FAILED ")]
+        tail = tail + " | " + "; ".join(named[:6] if named
+                                        else ["no FAILED lines; see stderr: "
+                                              + (r.stderr or "")[-300:]])
+    last = lines[-1] if lines else ""
+    check("full test suite is green", r.returncode == 0 and "failed" not in last, tail)
 
 
 def v_litellm_is_a_real_dependency():

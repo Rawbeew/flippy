@@ -77,12 +77,31 @@ class TestPoisonedInventory:
 # ------------------------------------------------------------------ 3. tarpit
 
 class TestTarpit:
-    def test_bounded_no_matter_what_is_asked(self):
+    def test_bounded_no_matter_what_is_asked(self, monkeypatch):
+        """Ask for 10,000s against a small configured ceiling. The point is
+        that the ceiling wins; sleeping the real 8s cap would only slow the
+        suite down without proving anything more."""
+        monkeypatch.setenv("LOOMWEAVER_SENTINEL_MAX_DELAY", "0.05")
         start = time.time()
-        sentinel.tarpit_sleep("t", seconds=10_000)
+        got = sentinel.tarpit_sleep("t", seconds=10_000)
         elapsed = time.time() - start
-        assert elapsed <= sentinel.MAX_TARPIT_SECONDS + 0.6, (
-            f"tarpit ran {elapsed:.1f}s, cap is {sentinel.MAX_TARPIT_SECONDS}")
+        assert got <= 0.05, f"returned {got}s against a 0.05s ceiling"
+        assert elapsed < 1.0, f"slept {elapsed:.1f}s against a 0.05s ceiling"
+
+    def test_the_hard_ceiling_caps_a_absurd_configured_value(self, monkeypatch):
+        """LOOMWEAVER_SENTINEL_MAX_DELAY is resolved per call, so a typo like
+        99999 must not be able to park a worker for a day."""
+        monkeypatch.setenv("LOOMWEAVER_SENTINEL_MAX_DELAY", "99999")
+        assert sentinel._delay_ceiling() == sentinel.HARD_DELAY_CEILING
+
+    def test_an_unparseable_delay_falls_back_to_the_default(self, monkeypatch):
+        monkeypatch.setenv("LOOMWEAVER_SENTINEL_MAX_DELAY", "not-a-number")
+        assert sentinel._delay_ceiling() == 8.0
+
+    def test_a_negative_delay_is_clamped_to_zero(self, monkeypatch):
+        monkeypatch.setenv("LOOMWEAVER_SENTINEL_MAX_DELAY", "-5")
+        assert sentinel._delay_ceiling() == 0.0
+        assert sentinel.tarpit_sleep("t", seconds=60) == 0.0
 
     def test_zero_when_disabled(self, monkeypatch):
         monkeypatch.setenv("LOOMWEAVER_SENTINEL", "0")

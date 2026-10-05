@@ -48,7 +48,21 @@ _AUDIT_PATH = os.environ.get(
 
 # Hard ceilings. A deception layer that can be turned into a denial of service
 # against its own host is worse than no layer at all.
+# Read at import for backwards compatibility with anything importing the name.
 MAX_TARPIT_SECONDS = float(os.environ.get("LOOMWEAVER_SENTINEL_MAX_DELAY", "8"))
+# Absolute ceiling on the configurable delay. LOOMWEAVER_SENTINEL_MAX_DELAY is
+# resolved per call (see _delay_ceiling) so an operator can change it on a
+# running process, the same way FLIPPY_KILL_SWITCH is read live. Without this
+# ceiling a typo like 99999 would park a worker thread for a day per request.
+HARD_DELAY_CEILING = 30.0
+
+
+def _delay_ceiling() -> float:
+    try:
+        want = float(os.environ.get("LOOMWEAVER_SENTINEL_MAX_DELAY", "8"))
+    except (TypeError, ValueError):
+        return 8.0
+    return max(0.0, min(want, HARD_DELAY_CEILING))
 MAX_EXPANSION_BYTES = int(os.environ.get("LOOMWEAVER_SENTINEL_MAX_BYTES", str(2 * 1024 * 1024)))
 MAX_REDIRECT_HOPS = 12
 MAX_AUDIT_BYTES = 4 * 1024 * 1024
@@ -143,8 +157,12 @@ def tarpit_sleep(label: str, seconds: float | None = None) -> float:
     """
     if not enabled():
         return 0.0
-    want = float(seconds if seconds is not None else MAX_TARPIT_SECONDS)
-    delay = max(0.0, min(want, MAX_TARPIT_SECONDS))
+    ceiling = _delay_ceiling()
+    try:
+        want = float(seconds if seconds is not None else ceiling)
+    except (TypeError, ValueError):
+        want = ceiling
+    delay = max(0.0, min(want, ceiling))
     if delay <= 0:
         return 0.0
     time.sleep(delay)
