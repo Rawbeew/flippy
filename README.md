@@ -1,102 +1,117 @@
 # flippy
 
-A free-tier-first multi-provider LLM router with a complete agent harness.
-Stdlib-only core (no dependencies), 327 tests, zero production traffic.
+flippy sends your prompts to AI models. You bring the API keys. flippy picks a
+provider, and if that provider is slow, full, or broken, it moves on to the next
+one. You get an answer either way.
+
+It works with the free plans that most providers offer. It needs no extra
+packages to run the core. It has 480 tests. No one has run it in production yet.
 
 [![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-327%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-480%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-## What flippy can do
+---
 
-### 1. Route LLM requests across any providers you hold keys for, with automatic failover
+## What it does
 
-flippy speaks the **OpenAI chat/completions wire format**, so it is compatible
-with any endpoint that does too — brand-agnostic, and **not** limited to the
-bundled names. Four ways to add a provider, no code change for any of them:
+### 1. It routes your requests, and it fails over
 
-| Path | Example |
+flippy talks the same format as OpenAI's chat API. Any service that speaks that
+format works with it. You are not tied to one brand.
+
+There are four ways to add a provider. None of them need a code change.
+
+| Way | Example |
 |---|---|
-| A built-in, switched on by its key | `GROQ_KEY`, `TOGETHER_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`, `XAI_API_KEY`, `PERPLEXITY_API_KEY`, `DASHSCOPE_API_KEY`, `HF_TOKEN`, … (22 in total) |
-| Local / self-hosted, switched on by its base URL | `OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `VLLM_BASE_URL` |
-| **Any** endpoint, via an env-var pair | `ACME_API_KEY` + `ACME_BASE_URL` registers a provider named `acme` |
-| A JSON catalog, or numbered endpoints | `FLIPPY_PROVIDERS_JSON=/etc/flippy/providers.json`, `FLIPPY_PROVIDER_1_*` |
+| A known provider, turned on by its key | `GROQ_KEY`, `TOGETHER_API_KEY`, `MISTRAL_API_KEY`, `CEREBRAS_API_KEY`, `XAI_API_KEY`, `PERPLEXITY_API_KEY`, `DASHSCOPE_API_KEY`, `HF_TOKEN`, and more (21 built in) |
+| A model running on your own machine | `OLLAMA_BASE_URL`, `LMSTUDIO_BASE_URL`, `VLLM_BASE_URL` |
+| **Any** service, using a pair of variables | `ACME_API_KEY` + `ACME_BASE_URL` adds a provider called `acme` |
+| A JSON file, or numbered entries | `FLIPPY_PROVIDERS_JSON=/etc/flippy/providers.json`, `FLIPPY_PROVIDER_1_*` |
 
 ```bash
-python -m src.loomweaver providers          # what you have configured right now
-python -m src.loomweaver providers --all    # the whole catalog + how to enable each
+python -m src.loomweaver providers          # what you have set up right now
+python -m src.loomweaver providers --all    # the full list, and how to turn each one on
 ```
 
-The generic path accepts `_API_KEY` / `_APIKEY` / `_KEY` / `_TOKEN` for the
-credential and `_BASE_URL` / `_API_BASE` / `_BASE` / `_ENDPOINT` / `_URL` for
-the endpoint, with `<PREFIX>_MODELS` to override the model list. A credential
-with **no** endpoint is ignored — a `STRIPE_API_KEY` in your environment never
-becomes an LLM. Infra prefixes (AWS, GITHUB, AZURE, …) are excluded outright.
+For the "any service" path, the key can end in `_API_KEY`, `_APIKEY`, `_KEY` or
+`_TOKEN`. The address can end in `_BASE_URL`, `_API_BASE`, `_BASE`, `_ENDPOINT`
+or `_URL`. Add `<PREFIX>_MODELS` to name the models yourself.
 
-When one rate-limits, errors, or hangs, the next picks up
-mid-request. **No single provider (Groq or otherwise) is required.**
+A key with no address is ignored. A `STRIPE_API_KEY` in your environment will
+not turn into an AI provider. Names that belong to cloud or code services (AWS,
+GITHUB, AZURE and others) are skipped on purpose.
+
+When a provider rate-limits you, returns an error, or hangs, the next one picks
+up the same request. **No single provider is required.**
 
 ```bash
-# set ANY one provider key to start — e.g.:
+# Set any one key to begin. For example:
 export OPENROUTER_KEY=sk-or-...      # or GROQ_KEY, NVIDIA_KEY, OPENAI_API_BASE+OPENAI_API_KEY, ...
 python src/ai_failover.py "explain KV caches"
 python src/ai_failover.py --model openai/gpt-oss-120b "write a haiku"
-python src/ai_failover.py --json "list 3 colors"   # machine-readable output
+python src/ai_failover.py --json "list 3 colors"   # output for a program to read
 ```
 
-What the router does for you, in order:
+Here is what happens to a request, in order:
 
-- **Adaptive provider ordering** — providers are scored by an EWMA of
-  success rate over latency. A provider that just failed sinks below the
-  healthy ones; a fast one rises. Registry order is the cold-start tie-break,
-  so first-run behavior is unchanged.
-- **In-provider retry with backoff** — a transient 500 gets up to 3 attempts
-  on the same provider (exponential backoff + jitter, `Retry-After`
-  respected) before the router walks. A flaky provider recovers without
-  wasting a failover hop.
-- **429s are never retried in-provider** — the quota ledger already owns
-  rate-limit cooldowns; retrying only burns quota. Failover instead.
-- **Quota ledger** — every provider has a daily request budget. When it's
-  exhausted, the router skips that provider *before* hitting the 429.
-  Escalating cooldowns on rate limits: 5 min → 15 min → 1 hour.
-- **Multi-key rotation** — paste several keys comma-separated
-  (`GROQ_KEY=k1,k2,k3`). Dead keys (401/403) are skipped permanently;
-  exhausted keys (429) cool down and rotate back in. Key material is never
-  written to disk by the rotation state — only indices and statuses.
-- **Semantic response cache** — near-duplicate prompts hit a SQLite-backed
-  TF-IDF cache (cosine ≥ 0.92, 168h TTL) and return instantly without a
-  provider call. Stateful tool conversations skip the cache.
-- **Hedged requests** — fire the top two providers concurrently, take the
-  first answer, abandon the loser. Opt-in, and *not* a tail-latency win on our
-  own measurement: `benchmarks/HEDGED.md` records p50 essentially flat
-  (1.199s vs 1.208s) and p95 **worse** (4.360s vs 1.635s), because on a slow
-  tail both requests complete. Use it when availability matters more than tail
-  latency. (Threading-based; burns 2x quota on slow tails.)
-- **Deadline budgets** — `route(..., timeout_budget_s=30)` stops walking
-  providers and retrying when the budget is spent.
-- **Full attempt trails** — every provider attempt emits an event with
-  attempt number, status, latency; every backoff emits a `retry_wait` event.
-  The run log shows the complete routing decision path, replayable.
+- **Providers are ranked by how well they are doing.** flippy keeps a running
+  score for each one, based on how often it succeeds and how fast it answers.
+  Recent results count for more than old ones. A provider that just failed drops
+  down the list. A fast one moves up. On a cold start the list order is used, so
+  the first run behaves normally.
+- **A flaky provider gets a second chance.** A temporary server error is tried
+  up to 3 times on the same provider, with a wait that grows each time. A
+  `Retry-After` header is respected. This lets a provider recover without
+  wasting a switch.
+- **Rate-limit errors are not retried on the spot.** flippy already tracks those
+  cooldowns, so retrying would only burn more quota. It switches instead.
+- **Each provider has a daily budget.** flippy keeps a record of what you have
+  used. When a provider's budget is gone, it is skipped *before* you hit a
+  rate limit. Cooldowns get longer each time: 5 minutes, then 15, then 1 hour.
+- **You can use several keys for one provider.** Put them in one variable,
+  separated by commas: `GROQ_KEY=k1,k2,k3`. Keys that are rejected (401/403) are
+  dropped for good. Keys that are only rate-limited (429) rest, then come back.
+  The saved state holds only key numbers and statuses, never the keys
+  themselves.
+- **Repeat questions can be answered from disk.** flippy keeps a cache in
+  SQLite. A new prompt that overlaps enough with an old one (word overlap of
+  0.92 or more) gets the saved answer at once, with no provider call. Answers
+  stay for 168 hours. Conversations that use tools skip the cache.
+- **You can ask two providers at once.** flippy fires the top two, takes
+  whichever answers first, and drops the other. This is optional. It is **not**
+  a speed win for the slowest cases: our own test found the middle case about
+  the same (1.199s vs 1.208s) and the worst case clearly worse (4.360s vs
+  1.635s), because both requests finish. See `benchmarks/HEDGED.md`. Use it when
+  staying up matters more than worst-case speed. It costs double quota when
+  things are slow.
+- **You can set a time limit.** `route(..., timeout_budget_s=30)` stops trying
+  new providers once 30 seconds are gone.
+- **Every attempt is written down.** Each try records the provider, the attempt
+  number, the status and the time. The log shows the whole decision path, so you
+  can replay what happened.
 
-### 2. Serve an OpenAI-compatible HTTP API
+### 2. It can serve as an HTTP API
 
 ```bash
-python src/server.py                    # PORT env var, default 8080
+python src/server.py                    # PORT sets the port, default 8080
 ```
 
-A stdlib-only HTTP server. Point any OpenAI client at it:
+This is a plain HTTP server, no web framework needed. Any OpenAI-compatible
+client can talk to it.
 
-| Endpoint | What it does |
+| Address | What it gives you |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI-shaped chat with full failover behind it |
-| `GET /health` | liveness probe |
-| `GET /metrics` | Prometheus text metrics (all `flippy_` prefixed) |
-| `GET /usage` | per-provider calls / errors / latency / tokens + cache savings |
-| `GET /quota` | live per-provider free-tier headroom |
+| `POST /v1/chat/completions` | Chat, with all the failover behind it |
+| `GET /health` | A simple "am I alive" check |
+| `GET /metrics` | Metrics for Prometheus, all named `flippy_*` |
+| `GET /usage` | Calls, errors, speed and tokens per provider, plus cache savings |
+| `GET /quota` | How much free allowance is left per provider |
 
-Auth: set `FLIPPY_AUTH_TOKEN` to require `Authorization: Bearer <token>`.
-Binds localhost by default; set `HOST=0.0.0.0` to expose (and set the token).
+Set `FLIPPY_AUTH_TOKEN` to require an `Authorization: Bearer <token>` header.
+The server listens on localhost only, by default. Set `HOST=0.0.0.0` to open it
+to the network, and set the token when you do.
 
 ```bash
 curl -X POST http://localhost:8080/v1/chat/completions \
@@ -104,157 +119,164 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "hello"}]}'
 ```
 
-### 3. Run an autonomous agent with hardened tools
+### 3. It can run an agent that uses tools
 
 ```bash
 python -m src.loomweaver agent "check disk space with the shell tool"
 python -m src.loomweaver agent "fetch example.com and summarize" --session research
 python -m src.loomweaver agent "list the src directory" --model groq/openai/gpt-oss-120b
-python -m src.loomweaver agent "edit the report" --tools shell,write_file   # pre-authorize
+python -m src.loomweaver agent "edit the report" --tools shell,write_file   # allow ahead of time
 ```
-**Pre-flight intake (`--tools`):** the operator declares which
-dangerous capabilities are authorized BEFORE the run — the model only ever sees
-that set (no stealth auto-grant of shell/sql/write on a goal keyword). Same on
-armada (`--tools shell` intersects into every role). De-emphasize friction: the
-HTTP API stays a stateless instant drop-in (no questionnaire per request).
 
-A ReAct-style loop: goal → model → tool call → observation → repeat, with:
+The agent works in a loop: read the goal, ask the model, run a tool, look at the
+result, repeat.
 
-- **14 guarded tools**: `http_get`, `read_file`, `write_file`, `list_dir`,
-  `shell`, `remember` (session facts), `sql_query` (SELECT-only, read-only
-  connection), `json_transform` (filter/map/limit), `http_post_json`
-  (JSON-validated POST), plus `tts`, `rag_query`, `rag_add`, `summarize`,
-  `embed` (aihub-backed, intent-gated: a goal must name the capability to
-  get the tool). Tool set is derived from the goal (least privilege) —
-  `tool_scope=auto` by default.
-- **Security guards on every tool**: SSRF protection (private IPs, cloud
-  metadata, DNS-rebinding blocked), path jail (project root + scratch only,
-  credential-like paths denied), shell blocklist (25+ dangerous patterns,
-  env stripped of `KEY/TOKEN/SECRET/PASSWORD` vars, key-redaction on
-  output), SQL writes impossible at two independent layers, cron command
-  allowlist. `LOOMWEAVER_SAFE_MODE=1` disables shell entirely.
-- **String-aware JSON action parser** — the agent understands model output
-  wrapped in prose, markdown fences, brace-containing string values, and
-  stray-brace noise. Measured 12/12 on realistic free-tier outputs
-  (the old greedy-regex parser scored 10/12).
-- **No-progress loop detection** — two consecutive steps with no tool call
-  and no done terminate the run with a `no_progress` reason instead of
-  burning max_steps. A tool call resets the counter.
-- **Budgeted observations** — tool output re-entering context is capped at
-  2000 chars with an explicit `[truncated, N more chars]` marker.
-- **Persistent sessions** — facts and messages survive across runs, trimmed
-  to 40 messages.
+**Deciding which tools the agent may use (`--tools`):** you say which risky
+abilities are allowed *before* the run starts. The model only ever sees that
+list. flippy will not quietly hand over shell, SQL or write access just because
+a word appeared in your goal. The same applies to the team mode (`--tools shell`
+passes into every role). The HTTP API is left alone: it stays a plain request
+and answer, with no questions asked first.
 
-### 4. Launch multi-agent fleets (armada)
+The agent has:
+
+- **14 tools, all guarded.** `http_get`, `read_file`, `write_file`, `list_dir`,
+  `shell`, `remember` (keeps facts for the session), `sql_query` (read-only
+  SELECT, on a connection that cannot write), `json_transform`
+  (filter/map/limit), `http_post_json` (POST with JSON checked), plus `tts`,
+  `rag_query`, `rag_add`, `summarize` and `embed`. The last five are only given
+  out when your goal actually asks for them. By default the tool list is chosen
+  from the goal, so the agent gets the least it needs.
+- **Safety checks on every tool.** Web requests are blocked from reaching
+  private addresses, cloud metadata endpoints and rebound DNS names. File access
+  is limited to the project folder and a scratch area, and files that look like
+  credentials are refused. The shell tool has a blocklist of 25+ dangerous
+  patterns, has `KEY`, `TOKEN`, `SECRET` and `PASSWORD` variables removed from
+  its environment, and has keys scrubbed from its output. SQL writes are
+  impossible in two separate places. Scheduled commands must come from an
+  allowed list. `LOOMWEAVER_SAFE_MODE=1` turns the shell off completely.
+- **A parser that copes with messy model output.** The agent understands JSON
+  wrapped in prose, inside code fences, containing braces in string values, and
+  surrounded by stray braces. On realistic free-tier output it scores 12/12. The
+  older pattern-matching parser scored 10/12.
+- **It notices when it is stuck.** Two steps in a row with no tool call and no
+  finish ends the run with the reason `no_progress`, instead of burning all the
+  remaining steps. Any tool call resets that count.
+- **Tool output is cut down.** Results going back into the conversation are
+  capped at 2000 characters, with a clear `[truncated, N more chars]` note.
+- **Sessions are kept.** Facts and messages survive between runs, trimmed to the
+  last 40 messages.
+
+### 4. It can run a team of agents
 
 ```bash
 python -m src.loomweaver armada "audit the security module and report findings"
 ```
 
-Four role-specialized agents on one mission, each restricted to its own
-toolset (enforced in dispatch code, not just prompts):
+Four agents share one mission. Each one is limited to its own tools, and that
+limit is enforced in code, not just in the prompt.
 
 | Role | Tools | Job |
 |---|---|---|
-| Scout | read-only: http_get, read_file, list_dir, shell | gather facts, end with FINDINGS |
-| Builder | read_file, write_file, list_dir, shell, http_get | implement, end with BUILT + TESTS |
-| Verifier | read_file, list_dir, shell, http_get | adversarial QA, end with VERDICT: PASS/FAIL |
-| Reporter | read-only + write | write the summary |
+| Scout | read-only: http_get, read_file, list_dir, shell | Collect facts. Finish with FINDINGS |
+| Builder | read_file, write_file, list_dir, shell, http_get | Do the work. Finish with BUILT and TESTS |
+| Verifier | read_file, list_dir, shell, http_get | Try to break it. Finish with VERDICT: PASS or FAIL |
+| Reporter | read-only plus write | Write the summary |
 
-### 5. Benchmark everything
+### 5. It can measure itself
 
 ```bash
 python -m src.loomweaver eval --suite basic        # 5 cases: math, caps, JSON, counting
-python -m src.loomweaver eval --suite reasoning    # logic + code output
-python -m src.loomweaver eval --suite extraction   # dates, prices, emails → JSON
-python -m src.loomweaver eval --suite tools        # tool-protocol emission
-python -m src.loomweaver eval --suite agent        # 4 multi-step agent tasks, scored on
-                                                   # required tools + genuine completion
-python -m src.loomweaver eval-compare              # suites × models comparison table
+python -m src.loomweaver eval --suite reasoning    # logic and code output
+python -m src.loomweaver eval --suite extraction   # dates, prices, emails turned into JSON
+python -m src.loomweaver eval --suite tools        # does it emit the tool protocol
+python -m src.loomweaver eval --suite agent        # 4 multi-step tasks, scored on the
+                                                   # tools used and whether the job finished
+python -m src.loomweaver eval-compare              # suites across models, in one table
 ```
 
-The agent suite measures the loop, not the model: it detects looping or
-never-done models deterministically (a broken planner scores 0/4; the
-shipped loop scores 100). Scored from the event trail, so max-steps
-exhaustion doesn't count as success.
+The agent suite measures the loop, not the model. A model that goes round in
+circles, or never finishes, is caught every time: a broken planner scores 0/4,
+and the loop in this repo scores 100. Scores come from the event log, so running
+out of steps never counts as success.
 
-Load testing and latency:
+Speed and load:
 
 ```bash
 python -m src.loomweaver loadtest --provider groq --concurrency 4 --requests 8
-python -m src.loomweaver ttft       # streaming time-to-first-token sweep across providers
+python -m src.loomweaver ttft       # time to first token, across providers
 ```
 
-### 6. Track usage, quota, and validate config
+### 6. It can show you usage, quota and config health
 
 ```bash
-python -m src.loomweaver usage       # dashboard: calls, errors, cache hits, avg latency, tokens
-python -m src.loomweaver quota       # per-provider free-tier headroom + cooldown state
-python -m src.loomweaver providers   # what's configured right now
-python -m src.loomweaver doctor      # validate config: provider keys + writable DB paths
-python -m src.loomweaver check-config   # alias of doctor
+python -m src.loomweaver usage       # calls, errors, cache hits, average speed, tokens
+python -m src.loomweaver quota       # free allowance left per provider, plus cooldowns
+python -m src.loomweaver providers   # what is set up right now
+python -m src.loomweaver doctor      # check your config: keys present, database paths writable
+python -m src.loomweaver check-config   # same as doctor
 ```
 
-`doctor` runs **without any network calls** and reports each check
-`OK / WARN / FAIL`:
-- Provider keys present and well-formed per provider (missing key = WARN,
-  malformed = FAIL)
-- Quota / cache / usage DB paths are writable
+`doctor` makes **no network calls**. Every check reports `OK`, `WARN` or
+`FAIL`:
 
-It is safe to run with no keys configured — it will WARN, not crash, and
-exit informatively.
+- Keys are present and shaped the way that provider expects. A missing key is a
+  WARN. A badly shaped one is a FAIL.
+- The quota, cache and usage database paths can be written to.
 
-Also live over HTTP at `/usage` and `/quota`.
+It is safe to run with no keys at all. It will warn, not crash.
 
-### 7. Schedule jobs (opt-in, local)
+`/usage` and `/quota` are also available over HTTP.
+
+### 7. It can run scheduled jobs (off by default, local only)
 
 ```bash
 python -m src.loomweaver cron --list
 python -m src.loomweaver cron --run nightly-eval
-python -m src.loomweaver cron --daemon     # interval loop; jobs defined in cron_jobs.json
+python -m src.loomweaver cron --daemon     # loops on an interval; jobs live in cron_jobs.json
 ```
 
-Jobs may only invoke loomweaver subcommands (allowlist enforced) and run
-as subprocesses — a poisoned job file can't escalate.
+A job may only run a known loomweaver command, and each job runs as a separate
+process. A job file that someone has tampered with cannot gain extra rights.
 
-### 8. It gets smarter the more you use it (self-learning memory)
+### 8. It remembers, and it gets better with use
 
-Every routed call and every agent run is recorded locally — goal, provider,
-latency, attempts, tools used, outcome. That memory does three things:
+Every routed call and every agent run is written to a local record: the goal,
+the provider, the time it took, the attempts, the tools used, and the outcome.
+That record does three things.
 
-- **Routing priors.** On startup the adaptive router replays what previous runs
-  measured, so a fresh process does not have to rediscover which provider is
-  fast and which one fails. The EWMA still decays a stale prior the moment
-  live measurements disagree.
-- **A user profile.** Inferred, never asked for: which provider actually works
-  for you, which tools your goals need, the vocabulary you reuse.
-- **Self-correction.** A failed run files a lesson against the shape of its
-  goal; a *similar* future goal retrieves it into the system prompt. You can
-  also teach it directly.
+- **A better starting point.** On startup the router replays what earlier runs
+  measured, so a new process does not have to learn again which provider is fast
+  and which one fails. If live results disagree, the older guess fades quickly.
+- **A picture of how you use it.** Worked out from your runs, never asked for:
+  which provider actually works for you, which tools your goals need, which
+  words you keep using.
+- **Learning from mistakes.** A failed run leaves a note against the kind of goal
+  it was. A similar goal later pulls that note into the prompt. You can also
+  teach it things directly.
 
 ```bash
-python -m src.loomweaver profile     # what flippy has inferred about you
+python -m src.loomweaver profile     # what flippy has worked out about you
 python -m src.loomweaver profile --json
 python -m src.loomweaver learn "when I say deploy, run the migration script first"
 python -m src.loomweaver forget --all
 ```
 
-A cold start injects nothing — a first-time user pays no context cost. Storage
-is one SQLite file (`runs/learning.db`), stdlib only, and nothing leaves the
-machine. Disable with `LOOMWEAVER_LEARNING_ENABLED=0`.
+A first run adds nothing to the prompt, so a new user pays no extra cost. The
+state is one SQLite file (`runs/learning.db`), uses no extra packages, and
+nothing leaves your machine. Turn it off with `LOOMWEAVER_LEARNING_ENABLED=0`.
 
-### 9. `aihub` — the single entry point
+### 9. `aihub` — one command for everything
 
-`aihub` is the one command you need. It routes through **litellm** and consumes
-the same universal provider registry as everything else, so any endpoint you
-can bring a key for works here too — as do the semantic cache, the quota
-ledger, and the self-learning memory.
+`aihub` is the one command you need. It routes through **litellm** and reads the
+same provider list as everything else, so any service you have a key for works
+here too. The cache, the quota record and the learning memory all apply.
 
 ```bash
-python src/aihub.py --all-providers   # every provider flippy speaks + how to enable it
-python src/aihub.py --providers       # what you have configured right now
+python src/aihub.py --all-providers   # every provider flippy speaks, and how to turn it on
+python src/aihub.py --providers       # what you have set up right now
 python src/aihub.py --chat "explain CRISPR in one paragraph"
-python src/aihub.py --chat "..." --simple    # route to the cheapest model
+python src/aihub.py --chat "..." --simple    # use the cheapest model
 python src/aihub.py --rag add "flippy is a multi-provider LLM failover router."
 python src/aihub.py --rag query "what is flippy"
 python src/aihub.py --summarize "long text..."
@@ -265,47 +287,48 @@ python src/aihub.py --learn "when I say deploy, run migrations first"
 python src/aihub.py --health
 ```
 
-`litellm` is a hard dependency; `edge-tts` and `pillow` are optional extras
-(`pip install flippy[hub]`) needed only for speech and image support. After
-`pip install -e .` the same surface is available as `flippy`.
+`litellm` is required. `edge-tts` and `pillow` are optional extras
+(`pip install flippy[hub]`), needed only for speech and images. After
+`pip install -e .` the same commands are available as `flippy`.
 
-The lower-level pieces below remain available when you want them directly:
-`python -m src.loomweaver <command>` for the agent, armada, evals, loadtest,
-cron, usage, quota and doctor, and `python src/server.py` for the
-OpenAI-compatible HTTP API.
+The lower-level pieces are still there if you want them directly:
+`python -m src.loomweaver <command>` for the agent, the team, evals, loadtest,
+cron, usage, quota and doctor, and `python src/server.py` for the HTTP API.
 
-### 10. Multimodal extras (optional, needs `flippy[hub]`)
+### 10. Extras for images, sound and documents (optional)
 
 ```bash
 pip install -r requirements.txt
 python src/aihub.py --health
 python src/aihub.py --chat "hello"
 python src/aihub.py --vision image.jpg "what is this?"
-python src/aihub.py --rag add doc.txt     # build a local vector store
+python src/aihub.py --rag add doc.txt     # build a local index of your documents
 python src/aihub.py --rag query "question"
 python src/aihub.py --summarize file.txt
-python src/aihub.py --tts "text"          # edge-tts voice
-python src/aihub.py --stt audio.wav
+python src/aihub.py --tts "text"          # read text aloud
+python src/aihub.py --stt audio.wav       # turn speech into text
 ```
 
-Chat, vision, RAG (local vector store), summarization, text-to-speech,
-speech-to-text — routed through the same litellm provider failover.
+Chat, image questions, search over your own documents, summaries, text to
+speech, and speech to text. All of them go through the same provider failover.
+
+---
 
 ## Quickstart
 
 ```bash
 git clone https://github.com/Rawbeew/flippy && cd flippy
 
-# Set ONE key to start (any provider — flippy is OpenAI/Anthropic-compatible,
-# no single brand required): OPENROUTER_KEY, FREEINFERENCE_KEY, GROQ_KEY,
-# NVIDIA_KEY, CLOUDFLARE_TOKEN+CLOUDFLARE_ACCOUNT_ID, or your own
-# OPENAI_API_BASE+OPENAI_API_KEY / ANTHROPIC_BASE_URL+ANTHROPIC_API_KEY.
+# Set ONE key to start. Any provider works — flippy speaks the OpenAI and
+# Anthropic formats, so no single brand is required: OPENROUTER_KEY,
+# FREEINFERENCE_KEY, GROQ_KEY, NVIDIA_KEY, CLOUDFLARE_TOKEN+CLOUDFLARE_ACCOUNT_ID,
+# or your own OPENAI_API_BASE+OPENAI_API_KEY / ANTHROPIC_BASE_URL+ANTHROPIC_API_KEY.
 export OPENROUTER_KEY=sk-or-...
 
 python src/ai_failover.py "explain KV caches in one paragraph"   # chat with failover
 python -m src.loomweaver agent "check disk space using the shell tool"
-python -m src.loomweaver doctor   # validate your config before your first real call
-pip install pytest && python -m pytest tests/ -q                  # 327 tests
+python -m src.loomweaver doctor   # check your config before your first real call
+pip install pytest && python -m pytest tests/ -q                  # 480 tests
 ```
 
 ## Docker
@@ -319,76 +342,80 @@ curl -X POST http://localhost:8080/v1/chat/completions \
   -d '{"messages": [{"role": "user", "content": "hello"}]}'
 ```
 
-## Architecture
+## How it fits together
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow, module map,
-scaling points, and trade-offs table.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow, the module map,
+where it can be scaled, and the trade-offs table.
 
 ```
-Request → cache check → adaptive ordering → quota check → key rotation
-        → provider call (≤3 attempts w/ backoff on 5xx) → usage record
+Request → cache check → rank providers → quota check → key rotation
+        → provider call (up to 3 tries, waiting longer each time) → record usage
                                                         ↓
-                                              failover on failure
+                                              switch provider on failure
 ```
 
 ## Modules
 
-| Module | Purpose |
+| Module | What it is for |
 |---|---|
-| `src/flippy_providers.py` | Canonical provider registry (single source of truth) |
-| `src/ai_failover.py` | Standalone CLI router |
-| `src/aihub.py` | litellm-powered multimodal hub (optional: vision, RAG, TTS, STT) |
-| `src/server.py` | stdlib HTTP server: /v1/chat, /health, /metrics, /usage, /quota |
-| `src/loomweaver/` | Agent harness: routing core, adaptive router policy, agent loop, armada fleet, evals, security, quota ledger, key rotation, semantic cache, usage, cron |
+| `src/flippy_providers.py` | The provider list. One place, no duplicates |
+| `src/ai_failover.py` | The router, as a command-line tool |
+| `src/aihub.py` | The litellm hub: chat, vision, documents, speech |
+| `src/server.py` | The HTTP server: /v1/chat, /health, /metrics, /usage, /quota |
+| `src/loomweaver/` | The agent harness: routing, ranking, agent loop, team mode, evals, safety, quota, key rotation, cache, usage, cron |
 
 ## Security
 
-Read [SECURITY.md](SECURITY.md) for the threat model: SSRF guards, path jail,
-env stripping, key redaction, cron allowlist, and `LOOMWEAVER_SAFE_MODE=1`.
+Read [SECURITY.md](SECURITY.md) for the threat model: blocked web requests, the
+file sandbox, environment cleaning, key scrubbing, the scheduled-command
+allowlist, and `LOOMWEAVER_SAFE_MODE=1`.
 
-Beyond the base guards, flippy ships a defense-in-depth layer that is
-assertion-backed by the test suite:
+On top of those basics, flippy has extra layers, each one pinned down by a test:
 
-- **SSRF in shell commands.** `shell` now extracts http(s) URLs and bare
-  `host:port` targets and routes them through the same `check_url` used by
-  `http_get` — so `curl http://169.254.169.254/...`,
-  `wget http://metadata.google.internal/`, `curl http://127.0.0.1:8080`,
-  and private-IP targets are blocked even when reached via the shell tool,
-  not just via `http_get`.
-- **Unicode / homoglyph normalization.** Before any guard matches, input is
-  NFKC-normalized: zero-width chars, BIDI overrides, soft hyphens, and
-  Cyrillic/Greek homoglyphs of Latin letters are folded, so a credential-read
-  like `cat .\u0435nv` (Cyrillic `е`) or `cat id_\u0433sa` (Cyrillic `г`) is
-  caught as `cat .env` / `cat id_rsa`.
-- **Secret redaction.** Tool output is scrubbed of 13+ credential families
-  (OpenAI, Anthropic, Groq, NVIDIA, Cloudflare, GitHub classic/oauth/fine-/
-  grained PAT, Slack, Stripe, AWS AKIA/ASIA, GCP service-account JSON, PEM
-  blocks, JWTs, HF, xAI) before it ever reaches the model.
+- **Blocked web requests from inside shell commands.** The `shell` tool finds
+  http(s) addresses and bare `host:port` targets in the command and checks them
+  the same way `http_get` does. So `curl http://169.254.169.254/...`,
+  `wget http://metadata.google.internal/`, `curl http://127.0.0.1:8080` and
+  private-address targets are blocked through the shell too, not just through
+  `http_get`.
+- **Look-alike characters are folded first.** Before any check runs, the input is
+  normalised: invisible characters, right-to-left overrides, soft hyphens, and
+  Cyrillic or Greek letters that look like Latin ones are all converted. So a
+  request to read `cat .\u0435nv` (with a Cyrillic `е`) or `cat id_\u0433sa`
+  (with a Cyrillic `г`) is caught as `cat .env` / `cat id_rsa`.
+- **Keys are scrubbed from tool output.** Output is cleaned of 13+ kinds of
+  credential (OpenAI, Anthropic, Groq, NVIDIA, Cloudflare, GitHub classic,
+  oauth and fine-grained tokens, Slack, Stripe, AWS AKIA and ASIA, GCP service
+  account JSON, PEM blocks, JWTs, HF, xAI) before the model ever sees it.
 
-Run `python -m src.loomweaver doctor` to validate config, and
-`LOOMWEAVER_SAFE_MODE=1` to disable the shell tool entirely.
+Run `python -m src.loomweaver doctor` to check your config, and set
+`LOOMWEAVER_SAFE_MODE=1` to turn the shell tool off completely.
 
-**Zero-trust operator switches** (read live at dispatch, not import-time):
-- `FLIPPY_KILL_SWITCH=1` (or `LOOMWEAVER_EMERGENCY_OFF=1`) hard-disables ALL
-  agent tool execution immediately — close a compromised run without killing
-  the process.
-- The tool-running agent (`agent`/`armada`) is NOT a schedulable cron
-  subcommand by default — a poisoned `cron_jobs.json` cannot silently fire an
-  autonomous, production-credentialed agent run. Re-enable deliberately via
-  `LOOMWEAVER_CRON_ALLOW_AGENT=1` (not recommended).
+**Switches an operator can use at any time** (read at the moment a tool runs,
+not when the program starts):
 
-## Not verified / honest limitations
+- `FLIPPY_KILL_SWITCH=1` (or `LOOMWEAVER_EMERGENCY_OFF=1`) stops **all** agent
+  tool execution at once. You can end a compromised run without killing the
+  process.
+- The tool-using agent (`agent` and `armada`) is **not** available as a
+  scheduled command by default. A tampered `cron_jobs.json` cannot quietly start
+  an unattended agent run that has your production keys. You can allow it with
+  `LOOMWEAVER_CRON_ALLOW_AGENT=1`, which we do not recommend.
 
-- Zero external users. No production traffic has hit this code.
-- Benchmarks are self-reported from a single machine on residential WiFi.
-- Free-tier providers only — paid overflow is untested.
-- The "semantic" cache is lexical TF-IDF, not embedding-based. It matches
-  word overlap, not meaning.
-- No async/await. Threading-based hedging exists but the core is synchronous.
-- Single-process. No multi-worker mode; SQLite state won't survive
-  concurrent writers at scale.
-- Native OpenAI-style tool_calling is supported (live-verified against Groq)
-  with a JSON-protocol fallback for models that text-inline actions.
+## What we have not proven
+
+We would rather say this here than let you find it later.
+
+- **No real users.** No production traffic has ever hit this code.
+- **The benchmarks are self-reported,** from one machine on home WiFi.
+- **Free plans only.** Paid tiers have not been tested.
+- **The "semantic" cache matches words, not meaning.** It uses TF-IDF, which is
+  word overlap. It is not an embedding model.
+- **No async/await.** The hedging uses threads; the core is synchronous.
+- **One process.** There is no multi-worker mode, and the SQLite state will not
+  hold up under many concurrent writers.
+- **Native tool calling works,** checked live against Groq, with a JSON-text
+  fallback for models that put actions inline.
 
 ## License
 
