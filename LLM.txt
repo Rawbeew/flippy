@@ -15,7 +15,7 @@ Pure Python stdlib for the core; optional litellm for multimodal.
 - Agent loop with role-based tool restrictions (scout/builder/verifier/reporter)
 - Agent benchmark suite (`eval --suite agent`) — multi-step tasks scored on tool chains + genuine completion
 - Eval suites and load-testing tools
-- 694 unit tests including failure injection
+- 723 unit tests including failure injection
 
 ## Key commands
 - `python src/ai_failover.py "prompt"` — one-shot chat with failover
