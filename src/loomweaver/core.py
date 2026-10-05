@@ -37,14 +37,13 @@ CREDS_PATH = os.environ.get(
     )
 )
 UA = "flippy/0.1.0 (github.com/Rawbeew/flippy)"
-import re as _re
 
 # Defense-in-depth: never let a raw provider error body reach a caller (log or
 # HTTP client) containing something that looks like a credential. Lightweight
 # scrub of common key shapes; tools.redact owns the full family list — this is
 # the boundary that must not echo secrets even if a provider embeds one in an
 # error message.
-_ERR_RE = _re.compile(
+_ERR_RE = re.compile(
     r"(?i)(sk-|gsk_|nvapi-|cfut_|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|"
     r"xox[baprs]-|rk_live_|rk_test_|sk_live_|sk_test_|AKIA[0-9A-Z]{16}|"
     r"ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{8,}|hf_[A-Za-z0-9]{20,}|"
@@ -153,7 +152,7 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
                 return {"ok": False,
                         "status": 200,
                         "retryable": True,
-                        "error": f"200 with empty choices: {json.dumps(data)[:200]}",
+                        "error": f"200 with empty choices: {scrub_error(json.dumps(data))[:200]}",
                         "latency": latency}
             message = choices[0].get("message") or {}
             text = (message.get("content") or "").strip()
@@ -177,13 +176,13 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
                 return {"ok": False,
                         "status": 200,
                         "retryable": True,
-                        "error": f"200 with empty content: {json.dumps(data)[:200]}",
+                        "error": f"200 with empty content: {scrub_error(json.dumps(data))[:200]}",
                         "latency": latency}
         except (KeyError, IndexError, TypeError) as e:
             return {"ok": False,
                     "status": 200,
                     "retryable": True,
-                    "error": f"malformed 200 body: {type(e).__name__}: {json.dumps(data)[:200]}",
+                    "error": f"malformed 200 body: {type(e).__name__}: {scrub_error(json.dumps(data))[:200]}",
                     "latency": latency}
     usage = data.get("usage", {}) or {}
     return {"ok": True, "text": text, "usage": usage, "latency": latency}
@@ -442,7 +441,12 @@ class RunLog:
         out = []
         if os.path.exists(self.path):
             for line in open(self.path, encoding="utf-8"):
-                out.append(json.loads(line))
+                if not line.strip():
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except (ValueError, TypeError):
+                    continue  # skip a corrupt/truncated partial line, don't crash the read
         return out
 
 

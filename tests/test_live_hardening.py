@@ -230,3 +230,56 @@ class TestSessionFreshDefault:
         texts = " ".join(m.get("content", "") for m in fs.saved["messages"])
         assert "prior turn" in texts  # continuity preserved when opted-in
 
+# ---------------------------------------------------------------- needle-eye 200-branch redaction
+class TestTwoHundredBranchRedaction:
+    """S2 (needle-eye): a 200-with-empty/garbage body whose text embeds a key
+    must be REDACTED in chat()'s error string — same rule as the non-200 path."""
+    def test_200_empty_choices_body_is_scrubbed(self):
+        from loomweaver import core
+        prov = {"name": "groq", "key": "k", "url": "http://p", "models": ["m"], "cost": "free"}
+
+        class Fake200:
+            status = 200
+            def read(self):
+                return b'{"no_choices": "error near gsk_ABCdef1234567890 leaked"}'
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with mock.patch("urllib.request.urlopen", return_value=Fake200()):
+            r = core.chat(prov, [{"role": "user", "content": "hi"}])
+        err = r.get("error", "")
+        assert "gsk_ABCdef1234567890" not in err
+        assert "[REDACTED]" in err
+
+    def test_200_empty_content_body_is_scrubbed(self):
+        from loomweaver import core
+        prov = {"name": "groq", "key": "k", "url": "http://p", "models": ["m"], "cost": "free"}
+
+        class Fake200EmptyContent:
+            status = 200
+            def read(self):
+                return b'{"choices":[{"message":{"content":null}}], "debug": "sk_live_ABCDEFghijAKLMNOPqrst leaked"}'
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        with mock.patch("urllib.request.urlopen", return_value=Fake200EmptyContent()):
+            r = core.chat(prov, [{"role": "user", "content": "hi"}])
+        err = r.get("error", "")
+        assert "sk_live_ABCDEFghijAKLMNOPqrst" not in err
+        assert "[REDACTED]" in err
+
+
+# ---------------------------------------------------------------- RunLog corrupt line
+class TestRunLogCorruptLine:
+    def test_read_skips_corrupt_line_not_crash(self):
+        from loomweaver import core
+        import tempfile, json as _json
+        d = tempfile.mkdtemp()
+        log = core.RunLog(runs_dir=d)
+        with open(log.path, "w", encoding="utf-8") as f:
+            f.write(_json.dumps({"ok": True}) + "\n")
+            f.write("this is not valid json { broken\n")   # corrupt trailing line
+        events = log.read()
+        assert len(events) == 1
+        assert events[0]["ok"] is True
+
