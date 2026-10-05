@@ -20,6 +20,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -56,10 +57,25 @@ class UsageDB:
         with self._conn() as c:
             c.executescript(_SCHEMA)
 
+    @contextmanager
     def _conn(self):
+        """Yield a fresh connection and ALWAYS close it on exit.
+
+        Used as `with self._conn() as c:` everywhere. The with-block body
+        commits on normal exit (matching the previous raw-connection
+        semantics), and the connection is closed in a `finally` so sustained
+        concurrent routing cannot leak file descriptors via GC churn.
+        """
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------ write
     def record(self, provider, model, ok, latency_s, cached=False, usage=None):

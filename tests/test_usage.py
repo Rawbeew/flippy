@@ -111,3 +111,19 @@ def test_quota_state_degrades(monkeypatch, tmp_path):
         assert isinstance(s.get("quota"), dict)
     finally:
         usage._shared = None
+
+
+def test_conn_closed_after_context_exit(tmp_path):
+    """B2-5: every connection usage._conn() yields must be closed when the
+    `with` block exits — no leaked sqlite3 handles across many cycles."""
+    import sqlite3
+
+    db = usage.UsageDB(db_path=str(tmp_path / "usage.db"))
+    yielded = []
+    for _ in range(100):
+        with db._conn() as c:
+            c.execute("SELECT 1")
+            yielded.append(c)
+    for c in yielded:
+        with pytest.raises(sqlite3.ProgrammingError):
+            c.execute("SELECT 1")  # closed => cannot operate on a closed db

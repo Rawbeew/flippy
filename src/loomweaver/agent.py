@@ -104,7 +104,6 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         'To use one, reply with ONLY JSON: {"tool": "<name>", "args": {...}}. '
         'When the goal is achieved, reply with ONLY JSON: {"done": "<summary>"}.'})
 
-    tool_schemas = [tools.schema_for(n) for n in tools.TOOLS]
     runlog.emit({"type": "run_start", "goal": goal, "session": sess["id"], "model": model})
 
     final = None
@@ -123,8 +122,8 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         if verbose:
             print(f"[step {step}] {r['provider']}: {r['text'][:160]}")
 
-        # native tool calls path (if provider returned them we'd handle here;
-        # freeinference/groq mostly inline them, so use JSON fallback protocol)
+        # actions ride on the model's plain-text reply, parsed as JSON
+        # (the JSON-protocol fallback; providers inline tool calls as text)
         action = _parse_json_action(r["text"])
         if action and action[0] == "done":
             final = action[1]
@@ -168,11 +167,13 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         final = "max steps reached"
         runlog.emit({"type": "run_done", "step": max_steps, "summary": final})
 
-    # trim session so repeated runs don't grow context unboundedly (keep system + recent)
+    # keep bounded context: preserve the system message(s) plus the most recent
+    # non-system messages, regardless of where the system message sits.
     if len(sess["messages"]) > MAX_SESSION_MESSAGES:
-        sys_msgs = [m for m in sess["messages"][:1] if m["role"] == "system"]
-        rest = sess["messages"][1:]
-        sess["messages"] = sys_msgs + rest[-(MAX_SESSION_MESSAGES - len(sys_msgs)):]
+        sys_msgs = [m for m in sess["messages"] if m.get("role") == "system"]
+        non_sys = [m for m in sess["messages"] if m.get("role") != "system"]
+        keep = max(MAX_SESSION_MESSAGES - len(sys_msgs), 0)
+        sess["messages"] = sys_msgs + non_sys[-keep:]
 
     store.save(sess)
     return {"result": final, "session": sess["id"], "run_dir": runlog.dir,

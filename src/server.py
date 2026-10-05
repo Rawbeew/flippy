@@ -59,6 +59,19 @@ def render_metrics():
     return "\n".join(lines) + "\n"
 
 
+def route_on_event(ev):
+    """Prometheus hook for one route pipeline event.
+
+    Only a genuine provider failure — an event that carries 'ok' set
+    explicitly to False (e.g. the llm_call event on a failed attempt) —
+    counts as a failure. Happy-path / internal events such as retry_wait,
+    quota_skip, cache_hit, key_dead or keys_exhausted omit 'ok' entirely and
+    must NOT inflate flippy_route_failures_total.
+    """
+    if ev.get("ok") is False:
+        _bump("flippy_route_failures_total")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "flippy/1.0"
@@ -138,8 +151,7 @@ class Handler(BaseHTTPRequestHandler):
                               "type": "provider_error"}})
 
             def on_event(ev):
-                if not ev.get("ok"):
-                    _bump("flippy_route_failures_total")
+                route_on_event(ev)
 
             r = core.route(messages, model=req.get("model"),
                            max_tokens=int(req.get("max_tokens") or 1024),

@@ -373,3 +373,78 @@ def test_safe_invoke_benign_dispatches_once():
     # benign dispatch produces no rendered observation events
     assert "response_served" not in seen
     assert "expansion_served" not in seen
+
+
+# ------------------------------------------------------------ B4-3: SIEM exporter
+
+
+REQUIRED_SIEM_FIELDS = {"timestamp", "event", "severity", "host", "threat", "path"}
+
+
+def test_struct_event_probe_file_read_has_full_schema():
+    """B4-3: a probe-file-read event normalizes to the stable SIEM schema."""
+    s = observability.emit_struct_event({
+        "event": "probe_file_read",
+        "path": "/app/sandbox/tenant_keys.py",
+        "severity": "high",
+        "host": "host-1",
+    })
+    assert set(s) >= REQUIRED_SIEM_FIELDS
+    assert s["event"] == "probe_file_read"
+    assert s["severity"] == "high"
+    assert s["host"] == "host-1"
+    assert s["path"] == "/app/sandbox/tenant_keys.py"
+    # timestamp is a parseable ISO-8601 string
+    import datetime
+    datetime.datetime.fromisoformat(s["timestamp"])
+
+
+def test_struct_event_hostile_request_present_threat():
+    """B4-3: a hostile-request event carries its threat label in the schema."""
+    s = observability.emit_struct_event({
+        "event": "hostile_request_detected",
+        "threat": "path_traversal_chain+env_dump",
+    })
+    assert set(s) >= REQUIRED_SIEM_FIELDS
+    assert s["event"] == "hostile_request_detected"
+    assert s["threat"] == "path_traversal_chain+env_dump"
+    # absent path defaults to empty string (field still present)
+    assert s["path"] == ""
+
+
+def test_struct_event_defaults_severity_and_host(tmp_path):
+    """B4-3: unset severity/host fall back to documented defaults."""
+    import os as _os
+    name = _os.environ.get("COMPUTERNAME", "unknown")
+    s = observability.emit_struct_event({"event": "unit_test"})
+    assert s["severity"] == "info"
+    assert s["host"] == name
+
+
+def test_struct_event_writes_single_line_json_when_enabled(tmp_path):
+    """B4-3: with LOOMWEAVER_SIEM_JSONL set, the structured event is appended
+    as one single-line JSON object per event — SIEM-ingestible JSONL."""
+    import json
+    target = str(tmp_path / "siem.jsonl")
+    old = observability.SIEM_LOG_PATH
+    observability.SIEM_LOG_PATH = target
+    try:
+        observability.emit_struct_event({"event": "probe_file_read", "path": "/p"})
+        observability.emit_struct_event({"event": "hostile_request_detected",
+                                         "threat": "x"})
+        with open(target, encoding="utf-8") as f:
+            lines = [l for l in f.read().splitlines() if l.strip()]
+        assert len(lines) == 2
+        for line in lines:
+            obj = json.loads(line)          # each line is valid JSON
+            assert set(obj) >= REQUIRED_SIEM_FIELDS
+    finally:
+        observability.SIEM_LOG_PATH = old
+
+
+def test_struct_event_never_raises():
+    """B4-3: a malformed event still returns a dict (or safe default), never raises."""
+    s = observability.emit_struct_event(None)   # type: ignore
+    assert isinstance(s, dict)
+    s2 = observability.emit_struct_event({"ts": "not-a-number", "event": "x"})
+    assert s2.get("event") == "x"

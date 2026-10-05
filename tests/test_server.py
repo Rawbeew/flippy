@@ -95,5 +95,43 @@ class ServerRoutes(unittest.TestCase):
         self.assertEqual(status, 404)
 
 
+class ServerOnEventMetrics(unittest.TestCase):
+    """B2-4: route_on_event bumps flippy_route_failures_total ONLY on a real
+    provider failure (ok present and explicitly False). Happy-path / internal
+    events that merely omit 'ok' must not inflate the failure counter."""
+
+    def _fresh_failure_count(self):
+        with server._lock:
+            server._METRICS["flippy_route_failures_total"] = 0
+            return server._METRICS["flippy_route_failures_total"]
+
+    def _read_failure_count(self):
+        with server._lock:
+            return server._METRICS["flippy_route_failures_total"]
+
+    def test_mixed_events_only_real_failure_counts(self):
+        self._fresh_failure_count()
+        events = [
+            {"type": "retry_wait", "provider": "groq", "attempt": 2},         # no 'ok'
+            {"type": "quota_skip", "provider": "groq", "reason": "cooldown"},  # no 'ok'
+            {"type": "cache_hit", "similarity": 0.97, "exact": False},          # no 'ok'
+            {"type": "key_dead", "provider": "groq", "key_index": 0},           # no 'ok'
+            {"type": "keys_exhausted", "provider": "groq"},                     # no 'ok'
+            {"type": "llm_call", "provider": "groq", "ok": True},               # happy path
+            {"type": "llm_call", "provider": "groq", "ok": False},              # GENUINE failure
+        ]
+        for ev in events:
+            server.route_on_event(ev)
+        self.assertEqual(self._read_failure_count(), 1)
+
+    def test_success_and_internal_events_do_not_count(self):
+        self._fresh_failure_count()
+        # no 'ok' field at all -> must not count; happy-path ok:True must not count
+        for ev in ({"type": "retry_wait"}, {"type": "cache_hit"},
+                   {"type": "llm_call", "ok": True}):
+            server.route_on_event(ev)
+        self.assertEqual(self._read_failure_count(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

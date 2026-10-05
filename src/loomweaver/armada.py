@@ -80,6 +80,11 @@ ROLES = {
 
 PIPELINE = ["scout", "builder", "verifier", "reporter"]
 
+# Tools that can mutate the filesystem or an external service. A role marked
+# `readonly` is denied these regardless of its tools list — defense-in-depth
+# on top of the tools-list restriction.
+_WRITE_TOOLS = {"write_file", "json_transform", "http_post_json"}
+
 
 class Agent:
     """One named sub-agent with a role, goal, and its own event log."""
@@ -149,10 +154,16 @@ def run_agent(agent, creds=None, max_steps=12, log=None):
             kind = action[0]
             if kind == "tool":
                 name, args = action[1], action[2]
-                # enforce role tool restrictions
-                if name not in agent.allowed_tools():
+                # enforce role tool restrictions (blocked paths never dispatch,
+                # so pin intercepted=False to keep the audit event well-formed)
+                if (ROLES[agent.role].get("readonly") and name in _WRITE_TOOLS):
+                    obs = (f"BLOCKED: agent role '{agent.role}' is read-only; "
+                           f"write-capable tool '{name}' is denied")
+                    intercepted = False
+                elif name not in agent.allowed_tools():
                     obs = (f"BLOCKED: agent role '{agent.role}' may not use "
                            f"tool '{name}'. Allowed: {agent.allowed_tools()}")
+                    intercepted = False
                 else:
                     from .tools import dispatch
                     obs, intercepted = observability.safe_invoke(name, args, dispatch)

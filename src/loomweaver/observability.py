@@ -55,6 +55,16 @@ LOG_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "telemetry.log.jsonl"),
 )
 
+# Optional SIEM-structured exporter. Set LOOMWEAVER_SIEM_JSONL to a file path
+# to fan every telemetry event out as a single-line JSON object with a stable,
+# ingestible schema (timestamp, event, severity, host, threat, path). When
+# unset, emit_struct_event is a no-op write but still returns the normalized
+# dict so callers/tests can inspect the shape.
+SIEM_LOG_PATH = os.environ.get("LOOMWEAVER_SIEM_JSONL", "")
+
+# Default severity when the source event does not declare one.
+_DEFAULT_SEVERITY = "info"
+
 # Telegram alert channel (optional). To enable: set both
 #   LOOMWEAVER_TELEGRAM_BOT_TOKEN  (a bot token from BotFather)
 #   LOOMWEAVER_TELEGRAM_CHAT_ID    (the chat to deliver alerts to)
@@ -130,11 +140,53 @@ def log_metric(event: dict) -> None:
                 rec.setdefault("host", os.environ.get("COMPUTERNAME", "unknown"))
                 rec.setdefault("install_nonce_prefix", _INSTALL_NONCE[:8])
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                # Optional SIEM-structured fan-out (same event, stable schema)
+                emit_struct_event(rec)
                 # drain the queue out to Telegram for alert-worthy events
                 if rec.get("event") in ALERT_EVENTS:
                     notify_alert(rec)
     except Exception:
         pass
+
+
+def emit_struct_event(event: dict) -> dict:
+    """Normalize a telemetry event into the stable SIEM schema and, when
+    LOOMWEAVER_SIEM_JSONL is configured, append it as a single-line JSON object.
+
+    Stable schema (documented, order-independent keys all present):
+        timestamp  str  ISO-8601 UTC
+        event      str  the telemetry event name
+        severity   str  from the event, else the module default ("info")
+        host       str  the reporting host
+        threat     str  threat label, if present, else ""
+        path       str  filesystem path in the event, if present, else ""
+
+    Never raises and never blocks: if the SIEM target is unset or unwritable
+    this is a silent no-op (still returns the normalized dict for inspection).
+    """
+    try:
+        ts = event.get("ts", time.time())
+        try:
+            from datetime import datetime, timezone
+            timestamp = datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+        except (ValueError, TypeError, OverflowError):
+            timestamp = str(ts)
+        structured = {
+            "timestamp": timestamp,
+            "event": str(event.get("event", "event")),
+            "severity": str(event.get("severity") or _DEFAULT_SEVERITY),
+            "host": str(event.get("host") or os.environ.get("COMPUTERNAME", "unknown")),
+            "threat": str(event.get("threat") or ""),
+            "path": str(event.get("path") or ""),
+        }
+        if SIEM_LOG_PATH:
+            with _LOG_LOCK:
+                os.makedirs(os.path.dirname(SIEM_LOG_PATH) or ".", exist_ok=True)
+                with open(SIEM_LOG_PATH, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(structured, ensure_ascii=False) + "\n")
+        return structured
+    except Exception:
+        return {}
 
 
 # ===========================================================

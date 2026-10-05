@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from loomweaver import quota_ledger as ql
@@ -171,3 +173,39 @@ class TestGetQuotaStatus:
                   "cooldown_until", "in_cooldown", "last_status", "fail_streak"):
             assert k in g
         assert g["remaining"] == 14399
+
+
+class TestConnClose:
+    """B2-5: QuotaLedger._conn must yield a connection that is ALWAYS closed
+    when the `with` block exits — no leaked sqlite3 handles across sustained
+    routing cycles."""
+
+    def test_every_context_conn_is_closed(self):
+        led = make_ledger()
+        yielded = []
+        # hammer the ledger across many open/use/close cycles, holding a ref
+        # to every connection the context manager yielded
+        for _ in range(100):
+            with led._conn() as c:
+                c.execute("INSERT OR IGNORE INTO quota_state(provider) VALUES ('p')")
+                yielded.append(c)
+        import sqlite3
+        for c in yielded:
+            with pytest.raises(sqlite3.ProgrammingError):
+                c.execute("SELECT 1")  # a live conn would succeed
+
+    def test_repeated_public_api_cycles_do_not_grow_db_dir(self):
+        # many connect/use/close cycles through the public API — the db's
+        # directory must not accumulate leaked -journal/-wal/-shm files and
+        # the single .db must remain the only entry.
+        import tempfile
+        d = tempfile.mkdtemp()
+        led = ql.QuotaLedger(db_path=os.path.join(d, "quota.db"))
+        for i in range(50):
+            led.check_quota("groq")
+            led.record_request("groq")
+            led.record_result("groq", 429)
+        entries = [e for e in os.listdir(d)]
+        # SQLite cleans transient journal/wal files on close; leaks would
+        # leave extra files behind.
+        assert entries == ["quota.db"], f"unexpected db dir entries: {entries}"
