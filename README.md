@@ -1,10 +1,10 @@
 # flippy
 
 A free-tier-first multi-provider LLM router with a complete agent harness.
-Stdlib-only core (no dependencies), 173 tests, zero production traffic.
+Stdlib-only core (no dependencies), 260+ tests, zero production traffic.
 
 [![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-173%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-260%2B%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -151,13 +151,24 @@ python -m src.loomweaver loadtest --provider groq --concurrency 4 --requests 8
 python -m src.loomweaver ttft       # streaming time-to-first-token sweep across providers
 ```
 
-### 6. Track usage and quota
+### 6. Track usage, quota, and validate config
 
 ```bash
 python -m src.loomweaver usage       # dashboard: calls, errors, cache hits, avg latency, tokens
 python -m src.loomweaver quota       # per-provider free-tier headroom + cooldown state
 python -m src.loomweaver providers   # what's configured right now
+python -m src.loomweaver doctor      # validate config: provider keys + writable DB paths
+python -m src.loomweaver check-config   # alias of doctor
 ```
+
+`doctor` runs **without any network calls** and reports each check
+`OK / WARN / FAIL`:
+- Provider keys present and well-formed per provider (missing key = WARN,
+  malformed = FAIL)
+- Quota / cache / usage DB paths are writable
+
+It is safe to run with no keys configured — it will WARN, not crash, and
+exit informatively.
 
 Also live over HTTP at `/usage` and `/quota`.
 
@@ -200,7 +211,8 @@ export GROQ_KEY=gsk_...
 
 python src/ai_failover.py "explain KV caches in one paragraph"   # chat with failover
 python -m src.loomweaver agent "check disk space using the shell tool"
-pip install pytest && python -m pytest tests/ -q                  # 173 tests
+python -m src.loomweaver doctor   # validate your config before your first real call
+pip install pytest && python -m pytest tests/ -q                  # 260+ tests
 ```
 
 ## Docker
@@ -240,6 +252,32 @@ Request → cache check → adaptive ordering → quota check → key rotation
 
 Read [SECURITY.md](SECURITY.md) for the threat model: SSRF guards, path jail,
 env stripping, key redaction, cron allowlist, and `LOOMWEAVER_SAFE_MODE=1`.
+
+Beyond the base guards, flippy ships a defense-in-depth layer that is
+assertion-backed by the test suite:
+
+- **SSRF in shell commands.** `shell` now extracts http(s) URLs and bare
+  `host:port` targets and routes them through the same `check_url` used by
+  `http_get` — so `curl http://169.254.169.254/...`,
+  `wget http://metadata.google.internal/`, `curl http://127.0.0.1:8080`,
+  and private-IP targets are blocked even when reached via the shell tool,
+  not just via `http_get`.
+- **Unicode / homoglyph normalization.** Before any guard matches, input is
+  NFKC-normalized: zero-width chars, BIDI overrides, soft hyphens, and
+  Cyrillic/Greek homoglyphs of Latin letters are folded, so a credential-read
+  like `cat .\u0435nv` (Cyrillic `е`) or `cat id_\u0433sa` (Cyrillic `г`) is
+  caught as `cat .env` / `cat id_rsa`.
+- **Decoy / deception layer (opt-in).** `LOOMWEAVER_DECOYS=1` plants
+  realistic-looking placeholder credential files into `sandbox/` (never
+  `src/` or `tests/`). Reading one through the tools returns a generated
+  response instead of file contents, and fires a structured telemetry event.
+- **Secret redaction.** Tool output is scrubbed of 13+ credential families
+  (OpenAI, Anthropic, Groq, NVIDIA, Cloudflare, GitHub classic/oauth/fine-/
+  grained PAT, Slack, Stripe, AWS AKIA/ASIA, GCP service-account JSON, PEM
+  blocks, JWTs, HF, xAI) before it ever reaches the model.
+
+Run `python -m src.loomweaver doctor` to validate config, and
+`LOOMWEAVER_SAFE_MODE=1` to disable the shell tool entirely.
 
 ## Not verified / honest limitations
 
