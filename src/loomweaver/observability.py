@@ -51,9 +51,72 @@ LOG_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "telemetry.log.jsonl"),
 )
 
+# Telegram alert channel (optional). To enable: set both
+#   LOOMWEAVER_TELEGRAM_BOT_TOKEN  (a bot token from BotFather)
+#   LOOMWEAVER_TELEGRAM_CHAT_ID    (the chat to deliver alerts to)
+# When either is unset, alerts are file-logged only. Best-effort and
+# never-raising, so a broken webhook cannot crash the agent.
+TELEGRAM_BOT_TOKEN = os.environ.get("LOOMWEAVER_TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("LOOMWEAVER_TELEGRAM_CHAT_ID", "")
+_TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+
+# event types that warrant a real-time alert (not telemetry noise)
+ALERT_EVENTS = {
+    "probe_file_read",
+    "hostile_request_detected",
+}
+
+
+def _telegram_build_message(event: dict) -> str:
+    """Format an event as a short Telegram message. No full payload leaks."""
+    kind = event.get("event", "event")
+    threat = event.get("threat")
+    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(event.get("ts", time.time())))
+    host = event.get("host", os.environ.get("COMPUTERNAME", "unknown"))
+    lines = [
+        "flippy alert: " + kind,
+        f"  host: {host}",
+        f"  time: {ts}",
+    ]
+    if threat:
+        lines.append(f"  signal: {threat}")
+    path = event.get("path")
+    if path:
+        lines.append(f"  path: {path}")
+    return "\n".join(lines)
+
+
+def notify_alert(event: dict) -> None:
+    """Push a high-severity event to Telegram. Best-effort, never raises."""
+    if not _TELEGRAM_ENABLED:
+        return
+    if event.get("event") not in ALERT_EVENTS:
+        return
+    # respect telemetry-rate guard: never more than ~1/s to avoid bot throttling
+    if not getattr(notify_alert, "_last_sent", 0) or time.time() - notify_alert._last_sent > 1.0:
+        text = _telegram_build_message(event)
+        if not text:
+            return
+        import urllib.request
+        import urllib.parse
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            data = urllib.parse.urlencode({
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "disable_web_page_preview": "true",
+            }).encode()
+            req = urllib.request.Request(url, data=data,
+                                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                r.read()
+            notify_alert._last_sent = time.time()
+        except Exception:
+            pass  # never crash the agent; log to file already handled by caller
+
 
 def log_metric(event: dict) -> None:
-    """Append a structured event. NEVER raises; anomalys must not crash the agent."""
+    """Append a structured event. NEVER raises; callers must not crash on telemetry."""
     try:
         with _LOG_LOCK:
             os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
@@ -63,6 +126,9 @@ def log_metric(event: dict) -> None:
                 rec.setdefault("host", os.environ.get("COMPUTERNAME", "unknown"))
                 rec.setdefault("install_nonce_prefix", _INSTALL_NONCE[:8])
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                # drain the queue out to Telegram for alert-worthy events
+                if rec.get("event") in ALERT_EVENTS:
+                    notify_alert(rec)
     except Exception:
         pass
 

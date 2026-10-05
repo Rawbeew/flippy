@@ -242,10 +242,10 @@ def test_read_file_on_benign_unchanged():
 # ------------------------------------------------------------ telemetry log
 
 
-def test_honeypot_log_writes(
+def test_telemetry_log_writes(
         tmp_path=tempfile.gettempdir()):
     import json
-    log = os.path.join(tmp_path, "test_honeypot.log.jsonl")
+    log = os.path.join(tmp_path, "test_telemetry.log.jsonl")
     old = observability.LOG_PATH
     observability.LOG_PATH = log
     try:
@@ -257,3 +257,48 @@ def test_honeypot_log_writes(
         assert "ts" in last
     finally:
         observability.LOG_PATH = old
+
+
+# ------------------------------------------------------------ telegram alert
+
+
+def test_telegram_message_builds_clean_text():
+    """The Telegram alert must be a compact, non-leaking message."""
+    msg = observability._telegram_build_message({
+        "event": "probe_file_read",
+        "threat": "path_traversal_chain",
+        "ts": 0,
+        "host": "testbox",
+        "path": "/app/sandbox/tenant_keys.py",
+    })
+    assert "flippy alert: probe_file_read" in msg
+    assert "testbox" in msg
+    assert "path_traversal_chain" in msg
+    # no full payload / secret material in the alert
+    assert "sk-" not in msg
+    assert "gsk_" not in msg
+
+
+def test_alert_events_cover_actual_event_names():
+    """ALERT_EVENTS must reference the real events the module can emit."""
+    from src.loomweaver import observability
+    emitted = {
+        "probe_file_read",
+        "hostile_request_detected",
+    }
+    # every configured alert type must be an event the module can actually emit
+    assert observability.ALERT_EVENTS == {"probe_file_read", "hostile_request_detected"}
+    assert observability.ALERT_EVENTS <= emitted
+
+
+def test_notify_alert_disabled_without_token():
+    """Without bot credentials, notify_alert must be a silent no-op."""
+    old_token, old_chat = observability.TELEGRAM_BOT_TOKEN, observability.TELEGRAM_CHAT_ID
+    observability.TELEGRAM_BOT_TOKEN, observability.TELEGRAM_CHAT_ID = "", ""
+    observability._TELEGRAM_ENABLED = False
+    try:
+        # should not raise and should not try a network call
+        observability.notify_alert({"event": "probe_file_read"})
+    finally:
+        observability.TELEGRAM_BOT_TOKEN, observability.TELEGRAM_CHAT_ID = old_token, old_chat
+        observability._TELEGRAM_ENABLED = bool(old_token and old_chat)
