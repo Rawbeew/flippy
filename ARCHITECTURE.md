@@ -48,10 +48,9 @@ src/
 ├── flippy_providers.py   ← THE registry (single source of truth)
 ├── ai_failover.py        ← standalone CLI router (thin wrapper)
 ├── aihub.py              ← litellm-powered multimodal hub (optional deps)
-├── server.py             ← stdlib HTTP server: /v1/chat, /health, /metrics, /usage
+├── server.py             ← stdlib HTTP server: /v1/chat (incl. native tools), /health, /metrics, /usage, /quota
 └── loomweaver/           ← agent harness package
     ├── core.py           ← routing engine: cache→quota→rotate→call→record
-    ├── providers.py      ← (re-export shim for flippy_providers)
     ├── agent.py          ← single-agent loop (plan→act→observe→done)
     ├── armada.py         ← multi-agent fleet: scout→builder→verifier→reporter
     ├── tools.py          ← tool registry with security guards

@@ -106,7 +106,7 @@ Even $45/mo MRR proves the concept. $900/mo makes it real.
 - ✅ Docker deployment — already works
 - ✅ CI/CD — GitHub Actions already configured
 - ✅ Security model — SSRF guards, path jails, env stripping
-- ✅ Tests — 116+ tests to port/adapt
+- ✅ Tests — 317 tests to port/adapt
 - ✅ Landing page design language — verysketchy.lol aesthetic
 
 ## What you need to build
@@ -124,4 +124,4 @@ Even $45/mo MRR proves the concept. $900/mo makes it real.
 2. **"Your free tiers, combined"** — the math: Groq 14k + NVIDIA 40/min + Cloudflare 10k + OpenRouter = massive combined capacity
 3. **"OpenAI-compatible"** — drop-in replacement, change one URL
 4. **"Your keys stay yours"** — privacy angle vs OpenRouter-style proxies
-5. **"147 tests"** — engineering credibility signal
+5. **"317 tests"** — engineering credibility signal

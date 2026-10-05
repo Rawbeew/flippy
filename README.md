@@ -1,10 +1,10 @@
 # flippy
 
 A free-tier-first multi-provider LLM router with a complete agent harness.
-Stdlib-only core (no dependencies), 260+ tests, zero production traffic.
+Stdlib-only core (no dependencies), 317 tests, zero production traffic.
 
 [![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-260%2B%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-317%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -89,10 +89,13 @@ python -m src.loomweaver agent "list the src directory" --model groq/openai/gpt-
 
 A ReAct-style loop: goal → model → tool call → observation → repeat, with:
 
-- **9 guarded tools**: `http_get`, `read_file`, `write_file`, `list_dir`,
+- **14 guarded tools**: `http_get`, `read_file`, `write_file`, `list_dir`,
   `shell`, `remember` (session facts), `sql_query` (SELECT-only, read-only
   connection), `json_transform` (filter/map/limit), `http_post_json`
-  (JSON-validated POST).
+  (JSON-validated POST), plus `tts`, `rag_query`, `rag_add`, `summarize`,
+  `embed` (aihub-backed, intent-gated: a goal must name the capability to
+  get the tool). Tool set is derived from the goal (least privilege) —
+  `tool_scope=auto` by default.
 - **Security guards on every tool**: SSRF protection (private IPs, cloud
   metadata, DNS-rebinding blocked), path jail (project root + scratch only,
   credential-like paths denied), shell blocklist (25+ dangerous patterns,
@@ -212,7 +215,7 @@ export GROQ_KEY=gsk_...
 python src/ai_failover.py "explain KV caches in one paragraph"   # chat with failover
 python -m src.loomweaver agent "check disk space using the shell tool"
 python -m src.loomweaver doctor   # validate your config before your first real call
-pip install pytest && python -m pytest tests/ -q                  # 260+ tests
+pip install pytest && python -m pytest tests/ -q                  # 317 tests
 ```
 
 ## Docker
@@ -298,7 +301,8 @@ Run `python -m src.loomweaver doctor` to validate config, and
 - No async/await. Threading-based hedging exists but the core is synchronous.
 - Single-process. No multi-worker mode; SQLite state won't survive
   concurrent writers at scale.
-- Agent tool_calls are JSON-protocol, not native function-calling (planned).
+- Native OpenAI-style tool_calling is supported (live-verified against Groq)
+  with a JSON-protocol fallback for models that text-inline actions.
 
 ## License
 
