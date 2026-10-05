@@ -190,8 +190,11 @@ class Handler(BaseHTTPRequestHandler):
                              "message": {"role": "assistant",
                                          "content": r.get("content", r.get("text", ""))}}],
             })
-        except Exception as e:  # never crash the worker
-            return self._send(500, {"error": {"message": str(e), "type": "internal_error"}})
+        except Exception as e:  # never crash the worker, never leak internals
+            # zero-trust: do NOT echo the raw exception to the client (could leak
+            # internal paths/provider details). Log the detail, reply generic.
+            print(f"[server] internal error: {e!r}", file=sys.stderr)
+            return self._send(500, {"error": {"message": "internal error", "type": "internal_error"}})
 
 
 def _creds_from_env():

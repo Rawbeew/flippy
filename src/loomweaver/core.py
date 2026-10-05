@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import re
 import time
 import urllib.error
 import urllib.request
@@ -454,15 +455,29 @@ class SessionStore:
         self.root = root or os.path.join(os.path.dirname(__file__), "..", "..", "sessions")
         os.makedirs(self.root, exist_ok=True)
 
+    _SID_SAFE = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
+
     def _path(self, sid):
         return os.path.join(self.root, f"{sid}.json")
 
+    @staticmethod
+    def _validate_sid(sid):
+        """Zero-trust: a session id is only ever a safe filename token. Refuse any
+        id that could traverse out of the sessions dir (.., slashes, drive letters)
+        — a future untrusted controller (HTTP param, tool arg) must never turn
+        session_id into a file read/write primitive."""
+        if not sid or not isinstance(sid, str) or not SessionStore._SID_SAFE.match(sid):
+            raise ValueError(f"invalid session id: {sid!r}")
+        return sid
+
     def load(self, sid):
+        sid = self._validate_sid(sid)
         p = self._path(sid)
         if os.path.exists(p):
             return json.load(open(p, encoding="utf-8"))
         return {"id": sid, "messages": [], "facts": {}, "created": time.time()}
 
     def save(self, sess):
-        with open(self._path(sess["id"]), "w", encoding="utf-8") as f:
+        sid = self._validate_sid(sess["id"])
+        with open(self._path(sid), "w", encoding="utf-8") as f:
             json.dump(sess, f, indent=2, ensure_ascii=False)

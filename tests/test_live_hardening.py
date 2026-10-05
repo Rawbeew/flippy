@@ -147,3 +147,31 @@ class TestKillSwitch:
         with mock.patch.dict("os.environ", {"LOOMWEAVER_EMERGENCY_OFF": "1"}):
             assert observability.kill_switched() is True
 
+# ---------------------------------------------------------------- zero-trust extras
+class TestServerNoInternalLeak:
+    def test_do_post_does_not_echo_raw_exception(self):
+        # the catch-all returns a generic message, never str(e)
+        src = open(Path(__file__).parent.parent / "src" / "server.py", encoding="utf-8").read()
+        assert '"internal error"' in src
+        assert 'str(e), "type": "internal_error"' not in src
+
+
+class TestSessionIdGuard:
+    def test_session_store_rejects_traversal(self):
+        from loomweaver.core import SessionStore
+        st = SessionStore(root=str(tempfile.mkdtemp()))
+        for bad in [r"../evil", r"..\..\secret", "a/b", "/abs/path", "", None, "a:b"]:
+            try:
+                st.load(bad)
+                raise AssertionError(f"sid {bad!r} was not rejected")
+            except ValueError:
+                pass
+
+    def test_session_store_accepts_safe_ids(self):
+        from loomweaver.core import SessionStore
+        st = SessionStore(root=str(tempfile.mkdtemp()))
+        # load defaults (create) must work for a normal id
+        sess = st.load("default")
+        assert sess["id"] == "default"
+        st.save({"id": "agent-user-1", "messages": [], "facts": {}})
+
