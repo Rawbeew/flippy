@@ -89,6 +89,11 @@ def _resolve_host_ips(host):
         return set()
 
 
+def _is_forbidden_ip(ip) -> bool:
+    """True for private/loopback/link-local/reserved addresses (SSRF targets)."""
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+
+
 def check_url(url):
     """SSRF guard. Returns (ok, reason)."""
     url = _normalize(url)
@@ -106,7 +111,7 @@ def check_url(url):
     # literal IP check
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        if _is_forbidden_ip(ip):
             return False, f"private/reserved IP {host}"
     except ValueError:
         pass
@@ -114,7 +119,7 @@ def check_url(url):
     for ip_str in _resolve_host_ips(host):
         try:
             ip = ipaddress.ip_address(ip_str)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            if _is_forbidden_ip(ip):
                 return False, f"{host} resolves to private IP {ip_str}"
         except ValueError:
             continue

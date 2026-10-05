@@ -60,6 +60,31 @@ class TestShellSSRF:
             ok, why = security.check_shell(cmd)
             assert ok, (cmd, why)
 
+    def test_shell_and_direct_url_guard_agree(self):
+        # Both URL consumers — the direct http_get/http_post_json path
+        # (security.check_url) and the shell-target path (check_shell ->
+        # _extract_target_urls) — must route through the SAME guard so a URL
+        # blocked one way is never reachable the other. Locks the single-source
+        # SSRF design against future divergence.
+        blocked = [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://metadata.google.internal/",
+            "http://localhost:8080/admin",
+            "http://127.0.0.1:9000/x",
+            "http://10.0.0.5/",
+        ]
+        allowed = ["https://raw.githubusercontent.com/a/b/main/README.md",
+                   "https://api.github.com/"]
+        for url in blocked:
+            assert not security.check_url(url)[0], url
+            shell = "curl " + url if ":" in url and "//" in url else url
+            ok, why = security.check_shell(shell)
+            assert not ok, (shell, why)
+        for url in allowed:
+            assert security.check_url(url)[0], url
+            ok, why = security.check_shell("curl %s" % url)
+            assert ok, (url, why)
+
 
 # ---------------------------------------------------------------------------
 # FIX 2: decoy-credential layer reachable from a real entrypoint
