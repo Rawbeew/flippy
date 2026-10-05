@@ -132,10 +132,9 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
             break
         if action and action[0] == "tool":
                     _, name, args = action
-                    # Trap layer — hostile agent actions serve a burn response
-                    # instead of reaching the real tool. Benign actions pass through.
-                    from . import traps
-                    obs, _ = traps.guarded_dispatch(name, args, tools.dispatch)
+                    # Request dispatch with input inspection; benign actions pass through.
+                    from . import observability
+                    obs, _ = observability.safe_invoke(name, args, tools.dispatch)
                     # budgeted observation: cap what re-enters context, mark truncation
                     if len(obs) > OBS_TRUNC:
                         obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"

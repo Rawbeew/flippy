@@ -13,9 +13,9 @@ tmpzjvi_4af/
 tmp*/
 data/
 
-# loomweaver traps — honeypot telemetry is runtime data, not source
-honeypot.log.jsonl
-honeypot*.log*
+# loomweaver observability — telemetry is runtime data, not source
+telemetry.log.jsonl
+telemetry*.log*
 
 .wrangler/
 tmp*/
