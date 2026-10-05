@@ -176,7 +176,11 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
                         "retryable": True,
                         "error": f"200 with empty content: {scrub_error(json.dumps(data))[:200]}",
                         "latency": latency}
-        except (KeyError, IndexError, TypeError) as e:
+        except (KeyError, IndexError, TypeError, AttributeError) as e:
+            # AttributeError belongs here: a provider that answers 200 with
+            # {"choices": ["a string"]} reaches choices[0].get(...) on a str.
+            # Without it the exception escaped chat() and route() entirely, so
+            # one malformed reply killed the request instead of failing over.
             return {"ok": False,
                     "status": 200,
                     "retryable": True,
