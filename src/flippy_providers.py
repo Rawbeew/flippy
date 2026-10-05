@@ -97,6 +97,29 @@ def get_providers(env=None):
             "models": ["openai/gpt-oss-20b", "openai/gpt-oss-120b"],
         })
 
+    # Generic OpenAI-compatible (or Anthropic-via-compatible-gateway) custom
+    # endpoint — flippy speaks the OpenAI chat/completions wire format, so any
+    # provider that does too can be added WITHOUT a brand being required.
+    # Set OPENAI_API_BASE (or ANTHROPIC_BASE_URL) + OPENAI_API_KEY (or
+    # ANTHROPIC_API_KEY) + OPENAI_MODELS (comma-separated). No Groq needed.
+    custom_base = e.get("OPENAI_API_BASE") or e.get("ANTHROPIC_BASE_URL")
+    custom_key = e.get("OPENAI_API_KEY") or e.get("ANTHROPIC_API_KEY")
+    if custom_base and custom_key:
+        models = [m.strip() for m in (e.get("OPENAI_MODELS") or "").split(",") if m.strip()]
+        if not models:
+            models = ["gpt-4o-mini"]  # sane default for an OpenAI-compatible endpoint
+        custom_url = custom_base.rstrip("/")
+        if not custom_url.endswith("/chat/completions"):
+            custom_url += "/chat/completions"
+        P.append({
+            "name": "custom", "cost": "free",
+            "url": custom_url,
+            "litellm_base": custom_base.rstrip("/"),
+            "key": custom_key, "keys": [custom_key],
+            "env_key": "OPENAI_API_KEY" if e.get("OPENAI_API_KEY") else "ANTHROPIC_API_KEY",
+            "models": models,
+        })
+
     return sorted(P, key=lambda p: (0 if p.get("primary") else 1, p["name"]))
 
 

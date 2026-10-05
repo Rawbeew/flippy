@@ -6,7 +6,8 @@ Get flippy running in 60 seconds.
 
 ```bash
 git clone https://github.com/Rawbeew/flippy && cd flippy
-export GROQ_KEY=gsk_...   # or OPENROUTER_KEY / FREEINFERENCE_KEY / NVIDIA_KEY
+# any provider — flippy is OpenAI/Anthropic-compatible, no single brand required
+export OPENROUTER_KEY=sk-or-...   # or GROQ_KEY / NVIDIA_KEY / OPENAI_API_BASE+OPENAI_API_KEY / ANTHROPIC_BASE_URL+ANTHROPIC_API_KEY
 ```
 
 ## 2. Chat with failover

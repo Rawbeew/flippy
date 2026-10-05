@@ -12,12 +12,17 @@ Stdlib-only core (no dependencies), 317 tests, zero production traffic.
 
 ### 1. Route LLM requests across 5 free providers with automatic failover
 
-One OpenAI-compatible request, five providers behind it: OpenRouter,
-freeinference.org, Groq, NVIDIA NIM, Cloudflare Workers AI. When one
-rate-limits, errors, or hangs, the next picks up mid-request.
+flippy speaks the **OpenAI chat/completions wire format**, so it is
+compatible with any OpenAI- or Anthropic-compatible endpoint — brand-agnostic.
+Bring keys for whatever providers you use: OpenRouter, freeinference.org,
+Groq, NVIDIA NIM, Cloudflare Workers AI, or your OWN OpenAI/Anthropic-compatible
+endpoint (OPENAI_API_BASE + OPENAI_API_KEY, or ANTHROPIC_BASE_URL +
+ANTHROPIC_API_KEY). When one rate-limits, errors, or hangs, the next picks up
+mid-request. **No single provider (Groq or otherwise) is required.**
 
 ```bash
-export GROQ_KEY=gsk_...                      # one key is enough to start
+# set ANY one provider key to start — e.g.:
+export OPENROUTER_KEY=sk-or-...      # or GROQ_KEY, NVIDIA_KEY, OPENAI_API_BASE+OPENAI_API_KEY, ...
 python src/ai_failover.py "explain KV caches"
 python src/ai_failover.py --model openai/gpt-oss-120b "write a haiku"
 python src/ai_failover.py --json "list 3 colors"   # machine-readable output
@@ -208,9 +213,11 @@ speech-to-text — routed through the same litellm provider failover.
 ```bash
 git clone https://github.com/Rawbeew/flippy && cd flippy
 
-# Set ONE key to start (any of: OPENROUTER_KEY, FREEINFERENCE_KEY,
-# CLOUDFLARE_TOKEN + CLOUDFLARE_ACCOUNT_ID, NVIDIA_KEY, GROQ_KEY)
-export GROQ_KEY=gsk_...
+# Set ONE key to start (any provider — flippy is OpenAI/Anthropic-compatible,
+# no single brand required): OPENROUTER_KEY, FREEINFERENCE_KEY, GROQ_KEY,
+# NVIDIA_KEY, CLOUDFLARE_TOKEN+CLOUDFLARE_ACCOUNT_ID, or your own
+# OPENAI_API_BASE+OPENAI_API_KEY / ANTHROPIC_BASE_URL+ANTHROPIC_API_KEY.
+export OPENROUTER_KEY=sk-or-...
 
 python src/ai_failover.py "explain KV caches in one paragraph"   # chat with failover
 python -m src.loomweaver agent "check disk space using the shell tool"
