@@ -26,7 +26,40 @@ Usage:
 Requires:
     pip install litellm edge-tts pillow
 """
-import os, sys, json, time, argparse, base64, hashlib, math
+import os, sys, json, time, argparse, base64, hashlib, math, re as _re
+
+
+# ---------- Secret hygiene (Tier-3) ----------
+def _secret_env_vars():
+    return ("FREEINFERENCE_KEY", "GROQ_KEY", "NVIDIA_KEY",
+            "CLOUDFLARE_TOKEN", "OPENROUTER_KEY", "ANTHROPIC_API_KEY")
+
+
+def _redact_secrets(text):
+    """Strip ANY configured key, plus common key shapes, from a message before
+    it reaches a log line or exception. The Full-Key rule: never echo a
+    complete secret. Defensive — never raises, degrades to the raw input."""
+    try:
+        if not text:
+            return text
+        s = str(text)
+        for env in _secret_env_vars():
+            v = os.environ.get(env)
+            if v:
+                s = s.replace(v, "[REDACTED]")
+        pattern = _re.compile(
+            r"(sk-[A-Za-z0-9_-]{10,}|gsk_[A-Za-z0-9]{20,}|nvapi-[A-Za-z0-9_-]{10,}|"
+            r"cfut_[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|"
+            r"AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{20,}|"
+            r"xai-[a-z0-9]{20,}|eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,})")
+        return pattern.sub("[REDACTED]", s)
+    except Exception:
+        return str(text)
+
+
+def _safe_message(exc):
+    """Render an exception's message with any embedded secret scrubbed."""
+    return _redact_secrets(getattr(exc, "message", None) or str(exc))
 
 
 # ---------- Provider registry ----------
@@ -90,8 +123,12 @@ def smart_chat(messages, simple=False, use_rag=False, top_k=3, model=None,
             messages = [{"role": "system", "content": sys_msg}] + messages
     if not model:
         model = "deepseek-v4-flash" if simple else "minimax-m3"
-    resp = router.completion(model=model, messages=messages,
-                             max_tokens=max_tokens, caching=cache)
+    try:
+        resp = router.completion(model=model, messages=messages,
+                                 max_tokens=max_tokens, caching=cache)
+    except Exception as e:
+        # Full-Key rule: an auth failure must never surface the configured key.
+        raise RuntimeError(f"completion failed: {_safe_message(e)}") from None
     c = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage") or {}
     cache_read = 0
@@ -110,14 +147,15 @@ def smart_chat(messages, simple=False, use_rag=False, top_k=3, model=None,
 def summarize(text, max_words=80, model="deepseek-v4-flash"):
     """Cheap summarization — useful for compressing long contexts."""
     router, _ = build_router()
-    resp = router.completion(model=model,
-        messages=[{"role": "user", "content":
-            f"Compress the following into a concise summary of at most {max_words} words. "
-            f"Keep key facts, numbers, names:\n\n{text[:8000]}"}])
+    try:
+        resp = router.completion(model=model,
+            messages=[{"role": "user", "content":
+                f"Compress the following into a concise summary of at most {max_words} words. "
+                f"Keep key facts, numbers, names:\n\n{text[:8000]}"}])
+    except Exception as e:
+        raise RuntimeError(f"summary failed: {_safe_message(e)}") from None
     return resp["choices"][0]["message"]["content"].strip()
 
-
-# ---------- Embeddings (bge-m3 via freeinference) ----------
 def embed(texts):
     """bge-m3 from freeinference. Returns list of 1024-dim vectors."""
     import urllib.request, urllib.error
@@ -138,7 +176,8 @@ def embed(texts):
             d = json.loads(r.read().decode())
             return [item["embedding"] for item in d["data"]]
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"embed HTTP {e.code}: {e.read().decode()[:200]}")
+        raise RuntimeError(f"embed HTTP {e.code}: "
+                           f"{_safe_message(e.read().decode()[:200])}")
 
 
 # ---------- Local vector store (file-backed JSON) ----------
@@ -195,7 +234,7 @@ def tts(text, outpath=None):
         asyncio.run(_run())
         return outpath
     except Exception as e:
-        print(f"[aihub] edge-tts failed: {e}", file=sys.stderr)
+        print(f"[aihub] edge-tts failed: {_safe_message(e)}", file=sys.stderr)
     if os.environ.get("GROQ_KEY"):
         import urllib.request, urllib.error
         body = {"model": "canopylabs/orpheus-v1-english", "input": text, "voice": "tara"}
@@ -235,7 +274,8 @@ def stt(audio_path):
             d = json.loads(r.read().decode())
             return d.get("result", {}).get("text") or d.get("text") or d
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"stt HTTP {e.code}: {e.read().decode()[:200]}")
+        raise RuntimeError(f"stt HTTP {e.code}: "
+                           f"{_safe_message(e.read().decode()[:200])}")
 
 
 # ---------- Vision ----------
@@ -262,7 +302,8 @@ def vision(image_path, prompt, model="minimax-m3"):
             d = json.loads(r.read().decode())
             return d["choices"][0]["message"]["content"]
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"vision HTTP {e.code}: {e.read().decode()[:200]}")
+        raise RuntimeError(f"vision HTTP {e.code}: "
+                           f"{_safe_message(e.read().decode()[:200])}")
 
 
 # ---------- Tool / function-calling demo ----------
