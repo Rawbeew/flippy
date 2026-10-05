@@ -356,8 +356,10 @@ def v_no_vibecoded_markers():
                 continue
             fp = os.path.join(dirpath, fn)
             rel = os.path.relpath(fp, ROOT)
-            if rel.startswith("AUDIT-needle-eyed") or rel.startswith("scripts/verify"):
-                continue  # the audit and this verifier quote the markers on purpose
+            # audits/ is gitignored (never shipped) and quotes the markers on
+            # purpose to document what was removed; so does this verifier.
+            if rel.startswith("audits" + os.sep) or rel.startswith("scripts" + os.sep):
+                continue
             try:
                 text = open(fp, encoding="utf-8", errors="ignore").read()
             except OSError:
@@ -411,6 +413,92 @@ def v_test_suite():
     check("full test suite is green", r.returncode == 0 and "failed" not in tail, tail)
 
 
+def v_litellm_is_a_real_dependency():
+    """The decision: aihub is the entry point and litellm is not optional."""
+    import tomllib
+    with open(os.path.join(ROOT, "pyproject.toml"), "rb") as f:
+        d = tomllib.load(f)
+    deps = d["project"].get("dependencies") or []
+    scripts = d["project"].get("scripts") or {}
+    has_dep = any("litellm" in x for x in deps)
+    is_entry = scripts.get("flippy", "").startswith("aihub:")
+    importable = True
+    try:
+        import litellm  # noqa: F401
+    except ImportError:
+        importable = False
+    check("litellm is a hard dependency and aihub is the console entry point",
+          has_dep and is_entry and importable,
+          f"dependencies={deps}; scripts={scripts}; litellm importable={importable}")
+
+
+def v_aihub_consumes_universal_registry():
+    """Using only aihub must not mean losing bring-your-own-keys."""
+    os.environ["ACME_API_KEY"] = "ak_live_1"
+    os.environ["ACME_BASE_URL"] = "https://llm.acme.io/v1"
+    os.environ["ACME_MODELS"] = "acme-large"
+    try:
+        import aihub
+        names = {f for _l, f, _k, _b in aihub.build_router_models()}
+        check("aihub routes arbitrary BYO-key providers through litellm",
+              "acme-large" in names, f"model names include acme-large={'acme-large' in names}")
+    finally:
+        for v in ("ACME_API_KEY", "ACME_BASE_URL", "ACME_MODELS"):
+            os.environ.pop(v, None)
+
+
+def v_aihub_secret_hygiene_is_derived():
+    """A fixed six-name list cannot cover an open-ended provider surface."""
+    os.environ["MISTRAL_API_KEY"] = "mstk_real_secret_value"
+    try:
+        import aihub
+        covered = set(aihub._secret_env_vars())
+        msg = aihub._safe_message(Exception("401 mstk_real_secret_value"))
+        check("aihub redacts keys from every provider, not six hardcoded names",
+              "MISTRAL_API_KEY" in covered and "mstk_real_secret_value" not in msg,
+              f"covered={len(covered)} vars; mistral key redacted="
+              f"{'mstk_real_secret_value' not in msg}")
+    finally:
+        os.environ.pop("MISTRAL_API_KEY", None)
+
+
+def v_aihub_learns():
+    from unittest import mock
+    import aihub
+    from loomweaver import learning
+    path = os.path.join(tempfile.mkdtemp(), "a.db")
+    os.environ["LOOMWEAVER_LEARNING_DB"] = path
+    st = learning.LearningStore(db_path=path)
+    learning.set_store(st)
+
+    class R:
+        def completion(self, model=None, messages=None, **kw):
+            return {"choices": [{"message": {"content": "ok"}}], "model": model,
+                    "usage": {}}
+
+    try:
+        with mock.patch.object(aihub, "build_router", return_value=(R(), None)):
+            aihub.smart_chat([{"role": "user", "content": "summarise the invoice"}])
+        ok = st.stats()["interactions"] == 1
+        check("using only aihub still feeds the self-learning memory",
+              ok, f"interactions recorded via smart_chat = {st.stats()['interactions']}")
+    finally:
+        learning.set_store(None)
+        os.environ.pop("LOOMWEAVER_LEARNING_DB", None)
+
+
+def v_aihub_cli_surface():
+    env = {**os.environ, "PYTHONPATH": os.path.join(ROOT, "src"),
+           "LOOMWEAVER_LEARNING_DB": os.path.join(tempfile.mkdtemp(), "c.db")}
+    results = {}
+    for flag in ("--all-providers", "--providers", "--profile"):
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "src", "aihub.py"), flag],
+                           capture_output=True, text=True, env=env)
+        results[flag] = r.returncode
+    check("aihub CLI is self-sufficient (providers, catalog, profile)",
+          all(v == 0 for v in results.values()), f"exit codes={results}")
+
+
 def main():
     print("=" * 74)
     print("flippy — independent verification of audit findings")
@@ -426,6 +514,8 @@ def main():
                v_cron_new_job, v_loadtest_no_providers, v_aihub_jwt_redaction,
                v_aihub_rag_prints_all, v_armada_readonly_denies_shell_writes,
                v_key_rotation_preserves_cursor,
+               v_litellm_is_a_real_dependency, v_aihub_consumes_universal_registry,
+               v_aihub_secret_hygiene_is_derived, v_aihub_learns, v_aihub_cli_surface,
                v_no_vibecoded_markers, v_launcher_deleted,
                v_gitignore_covers_runtime, v_docs_match_code, v_test_suite):
         try:

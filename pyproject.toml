@@ -9,6 +9,9 @@ description = "Multi-provider LLM failover router with semantic caching, quota-a
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
+# aihub is the single entry point and routes through litellm, so litellm is a
+# real dependency rather than an optional extra.
+dependencies = ["litellm>=1.40"]
 authors = [
     {name = "Rabiu Raji", email = "raji.rawbeew@gmail.com"},
 ]
@@ -24,8 +27,13 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-hub = ["litellm"]
-dev = ["pytest"]
+# Multimodal extras: speech and image support in aihub. Everything else —
+# routing, failover, RAG, the agent harness — works without them.
+hub = ["edge-tts>=6.1", "pillow>=10.0"]
+dev = ["pytest", "coverage"]
+
+[project.scripts]
+flippy = "aihub:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

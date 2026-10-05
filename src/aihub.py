@@ -30,9 +30,39 @@ import os, sys, json, time, argparse, base64, hashlib, math, re as _re
 
 
 # ---------- Secret hygiene (Tier-3) ----------
+# Legacy brand variables, kept as a floor so redaction still works when the
+# registry cannot be imported.
+_LEGACY_SECRET_ENV_VARS = ("FREEINFERENCE_KEY", "GROQ_KEY", "NVIDIA_KEY",
+                           "CLOUDFLARE_TOKEN", "OPENROUTER_KEY",
+                           "ANTHROPIC_API_KEY")
+
+# Any variable that looks like a credential. Needed because the provider
+# surface is now open-ended: a hardcoded six-name list cannot cover
+# MISTRAL_API_KEY, TOGETHER_API_KEY, or an operator's own ACME_API_KEY.
+_CRED_VAR_RE = _re.compile(
+    r"^[A-Z][A-Z0-9_]*_(API_KEY|APIKEY|KEY|TOKEN|SECRET|PASSWORD)$")
+
+
 def _secret_env_vars():
-    return ("FREEINFERENCE_KEY", "GROQ_KEY", "NVIDIA_KEY",
-            "CLOUDFLARE_TOKEN", "OPENROUTER_KEY", "ANTHROPIC_API_KEY")
+    """Every environment variable that holds a credential.
+
+    Derived rather than hardcoded: the registry is open-ended, so a fixed list
+    would silently stop covering new providers and leave their keys echoable in
+    an error message. Never raises — redaction must not become the failure.
+    """
+    found = set(_LEGACY_SECRET_ENV_VARS)
+    try:
+        found |= {v for v in os.environ if _CRED_VAR_RE.match(v or "")}
+    except Exception:
+        pass
+    try:
+        from flippy_providers import get_providers
+        for p in get_providers():
+            if p.get("env_key"):
+                found.add(p["env_key"])
+    except Exception:
+        pass
+    return tuple(found)
 
 
 def _redact_secrets(text):
@@ -96,8 +126,10 @@ def build_router():
         model_list.append(entry)
     if not model_list:
         raise RuntimeError(
-            "no providers configured — set FREEINFERENCE_KEY / GROQ_KEY / "
-            "NVIDIA_KEY / CLOUDFLARE_TOKEN + CLOUDFLARE_ACCOUNT_ID")
+            "no providers configured. Any OpenAI-compatible endpoint works: set "
+            "its key (e.g. GROQ_KEY, TOGETHER_API_KEY, MISTRAL_API_KEY), or point "
+            "flippy at your own with <PREFIX>_API_KEY + <PREFIX>_BASE_URL. "
+            "Run `flippy providers --all` for the full list.")
     return litellm.Router(
         model_list=model_list,
         set_verbose=False,
@@ -123,12 +155,32 @@ def smart_chat(messages, simple=False, use_rag=False, top_k=3, model=None,
             messages = [{"role": "system", "content": sys_msg}] + messages
     if not model:
         model = "deepseek-v4-flash" if simple else "minimax-m3"
+
+    # Self-learning: remember which model actually answered, how long it took,
+    # and whether it worked, so routing improves across restarts. Imported lazily
+    # so aihub still runs if loomweaver is unavailable.
+    import time as _time
+    _t0 = _time.time()
+    _learn = None
+    try:
+        from loomweaver import learning as _learn_mod
+        _learn = _learn_mod
+    except Exception:
+        _learn = None
+
     try:
         resp = router.completion(model=model, messages=messages,
                                  max_tokens=max_tokens, caching=cache)
     except Exception as e:
+        if _learn:
+            _learn.record_route(messages, "litellm", model, False,
+                                _time.time() - _t0, 1)
+            _learn.note_failure(messages, _safe_message(e))
         # Full-Key rule: an auth failure must never surface the configured key.
         raise RuntimeError(f"completion failed: {_safe_message(e)}") from None
+    if _learn:
+        _learn.record_route(messages, "litellm", model, True,
+                            _time.time() - _t0, 1)
     c = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage") or {}
     cache_read = 0
@@ -353,6 +405,15 @@ def tooltest():
 
 
 # ---------- CLI ----------
+def print_profile():
+    """What flippy has learned. Works with or without loomweaver installed."""
+    try:
+        from loomweaver import learning
+        print(learning.render_text(learning.get_store().profile()))
+    except Exception as e:
+        print(f"profile unavailable: {_safe_message(e)}")
+
+
 def health():
     providers = build_router_models()
     print(f"providers ({len(providers)}):")
@@ -378,9 +439,49 @@ def main():
     ap.add_argument("--tts", help="text-to-speech prompt")
     ap.add_argument("--stt", help="path to audio file for STT")
     ap.add_argument("--top-k", type=int, default=3)
+    # provider + memory surface, so aihub is self-sufficient as the entry point
+    ap.add_argument("--providers", action="store_true",
+                    help="list the providers currently configured")
+    ap.add_argument("--all-providers", action="store_true",
+                    help="list every provider flippy can talk to and how to enable it")
+    ap.add_argument("--profile", action="store_true",
+                    help="show what flippy has learned about you")
+    ap.add_argument("--learn", help="teach flippy a rule to apply to similar prompts")
+    ap.add_argument("--forget", action="store_true", help="erase learned lessons")
     a = ap.parse_args()
     if a.health:
         health(); return
+    if a.all_providers:
+        from flippy_providers import describe_catalog
+        print("Every provider flippy speaks (OpenAI chat/completions wire format).")
+        print("Set the variable in column 3 to switch one on — any of them.\n")
+        print(f"{'provider':16} {'cost':6} {'activate with':52} models override")
+        print("-" * 104)
+        for row in describe_catalog():
+            print(f"{row['name']:16} {row['cost']:6} {row['activate_with']:52} "
+                  f"{row['models_env'] or '-'}")
+        print("\nPlus: any <PREFIX>_API_KEY + <PREFIX>_BASE_URL pair registers itself.")
+        return
+    if a.providers:
+        health(); return
+    if a.profile:
+        print_profile(); return
+    if a.learn:
+        try:
+            from loomweaver import learning
+            lid = learning.get_store().add_lesson(a.learn)
+            print(f"learned (lesson {lid}): {a.learn}")
+        except Exception as e:
+            print(f"could not store lesson: {_safe_message(e)}")
+        return
+    if a.forget:
+        try:
+            from loomweaver import learning
+            learning.get_store().forget()
+            print("forgot every lesson")
+        except Exception as e:
+            print(f"could not forget: {_safe_message(e)}")
+        return
     if a.tooltest:
         msg = tooltest()
         print(json.dumps(msg, indent=2)); return

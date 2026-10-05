@@ -2,6 +2,25 @@
 
 ## 2026-10-05 — Universal providers, self-learning memory, hardening sweep
 
+### `aihub` is the single entry point
+
+- **`litellm` is now a hard dependency**, not an optional extra. `aihub` is the
+  console entry point (`flippy = aihub:main`), and `edge-tts` / `pillow` moved
+  to the `[hub]` extra since only speech and image support need them.
+- **`aihub` consumes the universal provider registry**, so consolidating on it
+  does not narrow the provider surface — an arbitrary
+  `<PREFIX>_API_KEY` + `<PREFIX>_BASE_URL` endpoint reaches the litellm Router
+  unchanged.
+- **The self-learning memory is wired into `smart_chat`** on both the success
+  and the failure path, and `aihub` grew `--providers`, `--all-providers`,
+  `--profile`, `--learn` and `--forget`, so nothing is lost by using it alone.
+  The import is lazy and guarded: `aihub` still runs without `loomweaver`.
+- **Secret redaction is now derived, not a fixed list.** `_secret_env_vars()`
+  hardcoded six brand variables; with an open-ended provider surface that left
+  e.g. a configured `MISTRAL_API_KEY` echoable in an error message. It now
+  covers every credential-shaped variable plus each configured provider's
+  `env_key`.
+
 ### Any provider, bring your own keys
 
 - **The registry is no longer five brands.** `flippy_providers.py` is now a

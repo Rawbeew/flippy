@@ -243,7 +243,38 @@ A cold start injects nothing — a first-time user pays no context cost. Storage
 is one SQLite file (`runs/learning.db`), stdlib only, and nothing leaves the
 machine. Disable with `LOOMWEAVER_LEARNING_ENABLED=0`.
 
-### 9. Multimodal hub (optional, needs litellm)
+### 9. `aihub` — the single entry point
+
+`aihub` is the one command you need. It routes through **litellm** and consumes
+the same universal provider registry as everything else, so any endpoint you
+can bring a key for works here too — as do the semantic cache, the quota
+ledger, and the self-learning memory.
+
+```bash
+python src/aihub.py --all-providers   # every provider flippy speaks + how to enable it
+python src/aihub.py --providers       # what you have configured right now
+python src/aihub.py --chat "explain CRISPR in one paragraph"
+python src/aihub.py --chat "..." --simple    # route to the cheapest model
+python src/aihub.py --rag add "flippy is a multi-provider LLM failover router."
+python src/aihub.py --rag query "what is flippy"
+python src/aihub.py --summarize "long text..."
+python src/aihub.py --vision photo.jpg "what is in this image?"
+python src/aihub.py --tts "read this aloud"
+python src/aihub.py --profile         # what flippy has learned about you
+python src/aihub.py --learn "when I say deploy, run migrations first"
+python src/aihub.py --health
+```
+
+`litellm` is a hard dependency; `edge-tts` and `pillow` are optional extras
+(`pip install flippy[hub]`) needed only for speech and image support. After
+`pip install -e .` the same surface is available as `flippy`.
+
+The lower-level pieces below remain available when you want them directly:
+`python -m src.loomweaver <command>` for the agent, armada, evals, loadtest,
+cron, usage, quota and doctor, and `python src/server.py` for the
+OpenAI-compatible HTTP API.
+
+### 10. Multimodal extras (optional, needs `flippy[hub]`)
 
 ```bash
 pip install -r requirements.txt
