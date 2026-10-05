@@ -108,7 +108,12 @@ def chat(prov: dict, messages: list[dict], model: str | None = None,
             data = {"raw": str(e)}
         status = e.code
     except Exception as e:
-        return {"ok": False, "error": str(e), "latency": time.time() - t0}
+        # DNS / connection / timeout (non-HTTP) failures are transient: mark
+        # them retryable so route() gives the provider another chance (and can
+        # fail over) instead of treating them as terminal. HTTP 4xx / junk-200
+        # cases stay as-is above.
+        return {"ok": False, "retryable": True, "error": str(e),
+                "latency": time.time() - t0}
 
     latency = time.time() - t0
     if status != 200:

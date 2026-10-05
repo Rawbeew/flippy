@@ -143,3 +143,90 @@ class TestEdgeCases:
              mock.patch("loomweaver.core.load_creds", return_value={}):
             r = route([{"role": "user", "content": "hi"}], model="ghost/model")
         assert not r.get("ok")
+
+
+
+class TestNetworkTimeoutRetryable:
+    """B2-1: DNS / connection / timeout failures from chat() must be retryable.
+
+    The general-exception path (non-HTTPStatusError) covers DNS, refused
+    connections and socket timeouts. route() only retries when the dict carries
+    ``retryable``; before the fix that key was missing, so the most common
+    transient class was treated as terminal.
+    """
+
+    def test_chat_urlerror_is_retryable(self):
+        """A URLError (DNS/refused) must produce retryable=True, not a terminal fail."""
+        import urllib.error
+        from loomweaver.core import chat
+        prov = {"name": "p", "key": "k", "url": "http://unresolvable.invalid",
+                "models": ["m1"]}
+        with mock.patch("loomweaver.core.urllib.request.urlopen",
+                        side_effect=urllib.error.URLError("getaddrinfo failed")):
+            r = chat(prov, [{"role": "user", "content": "hi"}])
+        assert r["ok"] is False
+        assert r["retryable"] is True  # the whole point of the fix
+
+    def test_chat_oserror_timeout_is_retryable(self):
+        import socket
+        from loomweaver.core import chat
+        prov = {"name": "p", "key": "k", "url": "http://p", "models": ["m1"]}
+        with mock.patch("loomweaver.core.urllib.request.urlopen",
+                        side_effect=socket.timeout("timed out")):
+            r = chat(prov, [{"role": "user", "content": "hi"}], timeout=1)
+        assert r["ok"] is False
+        assert r["retryable"] is True
+
+    def test_chat_4xx_kept_non_retryable(self):
+        """HTTP 4xx must stay non-retryable even though the exception path changed."""
+        import urllib.error
+        from loomweaver.core import chat
+        prov = {"name": "p", "key": "k", "url": "http://p", "models": ["m1"]}
+        ctx = mock.MagicMock()
+        ctx.read.return_value = b'{"error": "forbidden"}'
+        e = urllib.error.HTTPError("http://p", 403, "Forbidden", {}, None)
+        e._fp = ctx
+        e.read = ctx.read
+        with mock.patch("loomweaver.core.urllib.request.urlopen", side_effect=e):
+            r = chat(prov, [{"role": "user", "content": "hi"}])
+        assert r["ok"] is False
+        assert r["status"] == 403
+        assert r["retryable"] is False  # 4xx must not be retried
+
+    def test_chat_5xx_still_retryable(self):
+        """HTTP 5xx keep the existing retryable=True behavior."""
+        import urllib.error
+        from loomweaver.core import chat
+        prov = {"name": "p", "key": "k", "url": "http://p", "models": ["m1"]}
+        ctx = mock.MagicMock()
+        ctx.read.return_value = b"{}"
+        e = urllib.error.HTTPError("http://p", 503, "Service Unavailable", {}, None)
+        e._fp = ctx
+        e.read = ctx.read
+        with mock.patch("loomweaver.core.urllib.request.urlopen", side_effect=e):
+            r = chat(prov, [{"role": "user", "content": "hi"}])
+        assert r["ok"] is False and r["status"] == 503
+        assert r["retryable"] is True
+
+    def test_route_retries_network_only_provider(self):
+        """route() must retry (in-provider) then fail over when a provider only
+        network-fails, i.e. its chat dict is retryable but non-ok."""
+        from loomweaver.core import route
+        calls = []
+
+        def chat_spy(prov, messages, model=None, max_tokens=1024, timeout=120):
+            calls.append(prov["name"])
+            if prov["name"] == "prov_fast":
+                # what real chat() now returns on a URLError/timeout
+                return {"ok": False, "retryable": True, "error": "Connection refused",
+                        "latency": 0.01, "status": None}
+            return {"ok": True, "text": "ok", "usage": {}, "latency": 0.05,
+                    "provider": prov["name"], "model": model or ""}
+
+        with mock.patch("loomweaver.core.build_providers", lambda creds=None: FAKE_PROVIDERS),              mock.patch("loomweaver.core.chat", side_effect=chat_spy):
+            r = route([{"role": "user", "content": "test"}])
+        assert r["ok"] and r["provider"] == "prov_slow"
+        # the network-only provider was given its full 3 in-provider retries
+        # before route failed over to the healthy provider.
+        assert calls == ["prov_fast"] * 3 + ["prov_slow"]
+

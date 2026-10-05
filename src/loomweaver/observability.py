@@ -562,8 +562,12 @@ def safe_invoke(name: str, args: dict, dispatch_fn):
     if not hostile:
         return (dispatch_fn(name, args), False)
     resp = route_request("", threat_label=hostile)
-    obs = (render_response(hostile) if resp else
-           render_payload(hostile))
+    # consume the dict returned by route_request exactly once — do NOT re-render.
+    # `body` is the single canonical observation each branch renders; falling back
+    # defensively so a missing key can never crash the interception.
+    obs = resp.get("body") if resp else None
+    if obs is None:
+        obs = render_response(hostile) if resp else render_payload(hostile)
     return (obs, True)
 
 
@@ -582,20 +586,23 @@ def route_request(payload: str, *, threat_label: Optional[str] = None) -> Option
         body, headers = placeholder_response(label)
         return {
             "layer": "static+body",
-            "body": body,
+            # Layer-5 expanded placeholder bytes live under a distinct key so
+            # they are actually reachable (previously shadowed by a second
+            # 'body'). `body` is the single canonical rendered observation.
+            "expansion": body,
             "headers": headers,
             "body": render_response(label),
         }
     if "exfil_pattern" in label or "enum_secrets" in label:
         return {
             "layer": "redirect+body",
-            "body": render_response(label),
+            # Layer-6 redirect-chain under its own key (not shadowed); `body`
+            # is the canonical rendered observation.
+            "redirect_chain": list_redirects(),
             "body": render_payload(label),
-            "next_steps": list_redirects(),
         }
     return {
         "layer": "payload+body",
-        "body": render_payload(label),
         "body": render_response(label),
     }
 

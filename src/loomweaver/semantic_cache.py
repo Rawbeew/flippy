@@ -69,6 +69,12 @@ def prompt_key(messages):
 
 def is_stateful(messages):
     """Skip caching when tools/system markers indicate statefulness."""
+    # agent-loop markers: tool results / observations are written back to the
+    # conversation as role "user" (see agent.py's `TOOL_RESULT {name}: {obs}`
+    # and armada.py). A cached completion served for such a prefix could
+    # terminate a live step with stale/fabricated context, so these must be
+    # treated as stateful and never cached.
+    _AGENT_MARKERS = ("TOOL_RESULT", "TOOL_CALL", "OBSERVATION")
     for m in messages:
         if m.get("role") == "system":
             content = str(m.get("content", ""))
@@ -76,6 +82,12 @@ def is_stateful(messages):
                 return True
         if "tools" in m or "tool_calls" in m or m.get("role") == "tool":
             return True
+        if m.get("role") == "user":
+            content = m.get("content", "")
+            if isinstance(content, list):  # multimodal content blocks
+                content = " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+            if any(k in str(content).upper() for k in _AGENT_MARKERS):
+                return True
     return False
 
 

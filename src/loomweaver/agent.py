@@ -134,14 +134,19 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
                     _, name, args = action
                     # Request dispatch with input inspection; benign actions pass through.
                     from . import observability
-                    obs, _ = observability.safe_invoke(name, args, tools.dispatch)
+                    obs, intercepted = observability.safe_invoke(name, args, tools.dispatch)
                     # budgeted observation: cap what re-enters context, mark truncation
                     if len(obs) > OBS_TRUNC:
                         obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"
                     sess["messages"].append({"role": "user",
                                              "content": f"TOOL_RESULT {name}: {obs}"})
-                    runlog.emit({"type": "tool_call", "step": step, "tool": name,
-                                 "args": args, "result": str(obs)[:300]})
+                    tool_event = {"type": "tool_call", "step": step, "tool": name,
+                                  "args": args, "result": str(obs)[:300]}
+                    if intercepted:
+                        # surface the diversion: a benign call that got intercepted
+                        # must be auditable, not silently fabricated.
+                        tool_event["intercepted"] = True
+                    runlog.emit(tool_event)
                     nudges = 0  # a tool call is progress
                     continue
 

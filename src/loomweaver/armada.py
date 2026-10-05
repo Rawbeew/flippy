@@ -155,11 +155,16 @@ def run_agent(agent, creds=None, max_steps=12, log=None):
                            f"tool '{name}'. Allowed: {agent.allowed_tools()}")
                 else:
                     from .tools import dispatch
-                    obs, _ = observability.safe_invoke(name, args, dispatch)
+                    obs, intercepted = observability.safe_invoke(name, args, dispatch)
                 messages.append({"role": "user",
                                  "content": f"TOOL_RESULT {name}: {str(obs)[:1500]}"})
-                log.emit({"type": "tool_call", "agent": agent.name,
-                          "tool": name, "result": str(obs)[:200]})
+                tool_event = {"type": "tool_call", "agent": agent.name,
+                              "tool": name, "result": str(obs)[:200]}
+                if intercepted:
+                    # surface the diversion in the run log so an intercepted
+                    # (benign-but-suspicious) call is auditable, not silent.
+                    tool_event["intercepted"] = True
+                log.emit(tool_event)
                 continue
             if kind == "done":
                 agent.result = action[1]

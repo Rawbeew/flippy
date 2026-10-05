@@ -110,3 +110,86 @@ class SemanticCacheTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    # ------------------------------------------------- B2-3: agent tool-loop markers
+
+    def test_agent_tool_result_transcript_is_stateful(self):
+        """A transcript exactly like agent.py emits (system prompt + GOAL + a
+        user `TOOL_RESULT ...` line) must be treated as stateful so route()/cache
+        skips it instead of serving a stale completion for the prefix."""
+        transcript = [
+            {"role": "system",
+             "content": "You are a terse autonomous agent. Achieve the user's goal "
+                        "using the available tools."},
+            {"role": "user", "content": "GOAL: inspect the deployment"},
+            {"role": "assistant",
+             "content": '{"tool": "read_file", "args": {"path": "config.json"}}'},
+            {"role": "user",
+             "content": "TOOL_RESULT read_file: <operator runbook payload>"},
+        ]
+        self.assertTrue(sc.is_stateful(transcript))
+
+    def test_agent_tool_call_and_observation_markers_stateful(self):
+        """TOOL_CALL and OBSERVATION markers alone make a transcript stateful."""
+        self.assertTrue(sc.is_stateful([{"role": "user", "content": "TOOL_CALL list_dir"}]))
+        self.assertTrue(sc.is_stateful([{"role": "user", "content": "OBSERVATION count=3"}]))
+
+    def test_plain_conversations_stay_cacheable(self):
+        """Non-agent callers keep caching: no markers, no stateful signal."""
+        self.assertFalse(sc.is_stateful(msgs("What is the capital of France?")))
+        self.assertFalse(sc.is_stateful([
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "GOAL: tell me a joke"},
+        ]))
+        # 'AVAILABLE TOOLS:' is not a tool-loop marker; plain tooling prose stays cacheable
+        self.assertFalse(sc.is_stateful([
+            {"role": "user", "content": "AVAILABLE TOOLS: read_file reply with JSON"},
+        ]))
+
+    def test_route_skips_cache_for_tool_loop(self):
+        """route() must NOT serve a cached response for a stateful TOOL_RESULT
+        transcript — it calls a real provider instead (no stale termination)."""
+        import tempfile
+        from unittest import mock
+        from loomweaver import core
+        tmp2 = tempfile.mkdtemp()
+        core._sc._default_cache = None  # reset singleton
+        old_enabled = os.environ.get("LOOMWEAVER_CACHE_ENABLED")
+        os.environ["LOOMWEAVER_CACHE_ENABLED"] = "1"  # opt back in (conftest disables)
+        os.environ["LOOMWEAVER_CACHE_DB"] = os.path.join(tmp2, "route_stateful.sqlite3")
+        try:
+            transcript = [
+                {"role": "system",
+                 "content": "You are a terse autonomous agent. Achieve the user's goal "
+                            "using the available tools."},
+                {"role": "user", "content": "GOAL: inspect the deployment"},
+                {"role": "user", "content": "TOOL_RESULT read_file: stale cached payload"},
+            ]
+            cache = core._sc.SemanticCache(db_path=os.environ["LOOMWEAVER_CACHE_DB"])
+            cache.store(transcript, "STALE-COMPLETION", model_tag="t")
+            cache.close()
+            events = []
+            called = []
+
+            def fake_chat(prov, messages, model=None, max_tokens=1024, timeout=120):
+                called.append(prov["name"])
+                return {"ok": True, "text": "fresh", "usage": {}, "latency": 0.01,
+                        "provider": prov["name"], "model": model or ""}
+
+            with mock.patch("loomweaver.core.build_providers",
+                            return_value=[{"name": "p", "key": "k", "url": "x",
+                                           "models": ["p"]}]),                  mock.patch("loomweaver.core.chat", side_effect=fake_chat):
+                r = core.route(transcript, creds={}, on_event=events.append)
+            # stateful transcript bypasses the cache and hits the provider
+            self.assertTrue(r.get("ok"))
+            self.assertIsNot(r.get("cached"), True)
+            self.assertEqual(called, ["p"])
+            self.assertNotIn("cache_hit", [e["type"] for e in events])
+        finally:
+            core._sc._default_cache = None
+            os.environ.pop("LOOMWEAVER_CACHE_DB", None)
+            if old_enabled is None:
+                os.environ.pop("LOOMWEAVER_CACHE_ENABLED", None)
+            else:
+                os.environ["LOOMWEAVER_CACHE_ENABLED"] = old_enabled
