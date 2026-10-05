@@ -77,4 +77,22 @@ def _fresh_usage_db(tmp_path):
         yield db
 
 
+@pytest.fixture(autouse=True)
+def _clean_provider_env(monkeypatch):
+    """Strip provider credentials from the ambient environment.
+
+    Without this, a test run inherits whatever keys happen to be exported in
+    the developer's shell or CI job, and assertions like
+    `flippy_providers_configured 0` flip depending on the machine. Tests that
+    want a provider configured set it explicitly with monkeypatch, which runs
+    after this fixture and so still wins.
+    """
+    for var in list(os.environ):
+        if var.endswith(("_API_KEY", "_APIKEY", "_KEY", "_TOKEN", "_SECRET")) or \
+                var.endswith(("_BASE_URL", "_API_BASE", "_BASE", "_ENDPOINT",
+                              "_MODELS")):
+            monkeypatch.delenv(var, raising=False)
+    yield
+
+
 import unittest.mock as mock  # noqa: E402  (used by fixture above)

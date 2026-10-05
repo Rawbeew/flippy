@@ -146,21 +146,32 @@ class TestSecretHygieneCoversEveryProvider:
         msg = aihub._safe_message(Exception("model minimax-m3 not found"))
         assert "minimax-m3" in msg, "redaction must not eat ordinary error text"
 
-    def test_learning_is_optional_not_fatal(self, monkeypatch):
-        """aihub must still work if loomweaver cannot be imported."""
-        import builtins
-        real_import = builtins.__import__
+    def test_missing_engine_fails_loudly_not_silently(self, monkeypatch):
+        """aihub and loomweaver are coupled by design.
 
-        def guarded(name, *a, **k):
-            if name.startswith("loomweaver"):
-                raise ImportError("loomweaver unavailable")
-            return real_import(name, *a, **k)
-
-        monkeypatch.setattr(builtins, "__import__", guarded)
+        Routing without the engine would silently drop key rotation, the cache,
+        the quota ledger and the memory, so a missing engine must be a clear
+        error rather than a degraded success.
+        """
+        # a provider must be configured, or build_router() raises first and the
+        # engine check is never reached
+        monkeypatch.setenv("GROQ_KEY", "gsk_" + "x" * 24)
+        monkeypatch.setattr(aihub, "hub", None)
         with mock.patch.object(aihub, "build_router",
                                return_value=(FakeRouter(), None)):
-            out = aihub.smart_chat([{"role": "user", "content": "hi"}])
-        assert out["content"] == "hello"
+            with pytest.raises(RuntimeError) as exc:
+                aihub.smart_chat([{"role": "user", "content": "hi"}])
+        assert "loomweaver engine is required" in str(exc.value)
+
+    def test_goal_text_reaches_the_learning_layer(self, store):
+        """The memory keys off the prompt; an empty goal would gut it."""
+        with mock.patch.object(aihub, "build_router",
+                               return_value=(FakeRouter(), None)):
+            aihub.smart_chat([{"role": "user",
+                               "content": "summarise the quarterly invoice"}])
+        vocab = store.profile()["vocabulary"]
+        assert "invoice" in vocab or "quarterly" in vocab, (
+            f"goal text never reached the learning layer; vocab={vocab}")
 
 
 class TestEntryPointSurface:

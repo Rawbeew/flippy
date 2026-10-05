@@ -5,6 +5,9 @@ pillow). All must stay optional and guarded so the module imports cleanly with
 NONE installed, and an authentication failure must never leak a full secret
 into an exception message or a log line.
 """
+
+import importlib.util
+import pytest
 import sys
 from pathlib import Path
 from unittest import mock
@@ -149,10 +152,16 @@ class TestRedactSecretsUnit:
             exc = self._call_tts_guard(bad)
             assert isinstance(exc, ValueError), f"unsafe outpath not refused: {bad} ({exc!r})"
 
+    @pytest.mark.skipif(
+        importlib.util.find_spec('edge_tts') is None,
+        reason="TTS path needs the optional edge-tts extra; without it aihub falls back to a live network call")
     def test_tts_outpath_default_is_safe_home_dir(self):
         exc = self._call_tts_guard(None)
         assert not isinstance(exc, ValueError)
 
+    @pytest.mark.skipif(
+        importlib.util.find_spec('edge_tts') is None,
+        reason="TTS path needs the optional edge-tts extra; without it aihub falls back to a live network call")
     def test_tts_outpath_opt_in_required_for_arbitrary(self, monkeypatch):
         exc = self._call_tts_guard("C:/Windows/Temp/x.mp3")
         assert isinstance(exc, ValueError), f"expected ValueError without opt-in, got {exc!r}"

@@ -407,8 +407,15 @@ def v_docs_match_code():
 
 
 def v_test_suite():
+    # Earlier checks export fake credentials to probe provider plumbing. Run the
+    # suite in a cleaned environment so a failure here means the code is broken,
+    # not that this script left GROQ_KEY behind.
+    env = {k: v for k, v in os.environ.items()
+           if not (k.endswith(("_API_KEY", "_APIKEY", "_KEY", "_TOKEN", "_SECRET",
+                               "_BASE_URL", "_API_BASE", "_BASE", "_ENDPOINT",
+                               "_MODELS")))}
     r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
-                       capture_output=True, text=True, cwd=ROOT)
+                       capture_output=True, text=True, cwd=ROOT, env=env)
     tail = (r.stdout or "").strip().splitlines()[-1] if r.stdout else ""
     check("full test suite is green", r.returncode == 0 and "failed" not in tail, tail)
 
@@ -499,6 +506,116 @@ def v_aihub_cli_surface():
           all(v == 0 for v in results.values()), f"exit codes={results}")
 
 
+def _isolated_env():
+    d = tempfile.mkdtemp()
+    env = {**os.environ, "PYTHONPATH": os.path.join(ROOT, "src")}
+    for var, name in (("LOOMWEAVER_KEYROTATION_DB", "rot"),
+                      ("LOOMWEAVER_QUOTA_DB", "quota"),
+                      ("LOOMWEAVER_USAGE_DB", "usage"),
+                      ("LOOMWEAVER_CACHE_DB", "cache"),
+                      ("LOOMWEAVER_LEARNING_DB", "learn")):
+        env[var] = os.path.join(d, name + ".db")
+    return env
+
+
+def v_key_rotation_reaches_litellm():
+    """A comma-separated key list must produce one deployment per LIVE key."""
+    for var, val in (("GROQ_KEY", "k1,k2,k3"), ("GROQ_MODELS", "gpt-oss-20b"),
+                     ("LOOMWEAVER_CACHE_ENABLED", "0")):
+        os.environ[var] = val
+    try:
+        import aihub
+        from loomweaver import hub, key_rotation as kr
+        d = tempfile.mkdtemp()
+        kr.set_state(kr.RotationState(db_path=os.path.join(d, "r.db")))
+        before = len(aihub.build_deployments())
+        kr.get_state().mark_dead("groq", 0, "revoked")
+        after = len(aihub.build_deployments())
+        check("multi-key rotation reaches the litellm Router",
+              before == 3 and after == 2,
+              f"deployments with 3 live keys={before}; after retiring one={after}")
+    finally:
+        for var in ("GROQ_KEY", "GROQ_MODELS"):
+            os.environ.pop(var, None)
+
+
+def v_semantic_cache_fronts_the_litellm_path():
+    """A near-duplicate prompt must not re-bill a provider."""
+    from unittest import mock
+    import aihub
+    from loomweaver import learning, semantic_cache as sc
+    d = tempfile.mkdtemp()
+    os.environ["LOOMWEAVER_CACHE_DB"] = os.path.join(d, "c.db")
+    os.environ["LOOMWEAVER_CACHE_ENABLED"] = "1"
+    os.environ["LOOMWEAVER_LEARNING_DB"] = os.path.join(d, "l.db")
+    os.environ["GROQ_KEY"] = "gsk_" + "x" * 24
+    sc._default_cache = None
+    learning.set_store(learning.LearningStore(db_path=os.path.join(d, "l.db")))
+
+    class R:
+        n = 0
+        def completion(self, model=None, messages=None, **kw):
+            R.n += 1
+            return {"choices": [{"message": {"content": "Paris"}}],
+                    "model": model, "usage": {}}
+
+    try:
+        msgs = [{"role": "user", "content": "what is the capital of france"}]
+        with mock.patch.object(aihub, "build_router", return_value=(R(), None)):
+            first = aihub.smart_chat(msgs)
+            second = aihub.smart_chat(msgs)
+        check("semantic cache fronts the litellm path (no duplicate billing)",
+              R.n == 1 and second.get("cached") is True,
+              f"litellm calls for 2 identical prompts={R.n}; second cached="
+              f"{second.get('cached')}")
+    finally:
+        learning.set_store(None)
+        os.environ.pop("LOOMWEAVER_CACHE_ENABLED", None)
+
+
+def v_http_and_cli_share_one_brain():
+    """The engine stores are shared, so the CLI sees what HTTP learned."""
+    env = _isolated_env()
+    code = (
+        "import sys; sys.path.insert(0, 'src');"
+        "from loomweaver import hub;"
+        "hub.record_outcome('mock','mock-1',True,0.01,"
+        "usage={'prompt_tokens':11,'completion_tokens':5},"
+        "goal='summarise the quarterly invoice for lagos office');"
+        "from loomweaver import learning;"
+        "print(learning.get_store().profile()['vocabulary'])")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       text=True, env=env, cwd=ROOT)
+    cli = subprocess.run([sys.executable, "src/aihub.py", "--profile"],
+                         capture_output=True, text=True, env=env, cwd=ROOT)
+    out = cli.stdout
+    check("HTTP/CLI/aihub share one memory (same engine stores)",
+          "invoice" in r.stdout and "invoice" in out and "mock" in out,
+          f"recorded vocab={r.stdout.strip()[:60]}; aihub --profile sees it="
+          f"{'invoice' in out}")
+
+
+def v_server_uses_the_same_resolver():
+    """/v1/chat/completions must not keep its own provider whitelist."""
+    src = open(os.path.join(ROOT, "src", "server.py")).read()
+    uses_core = "core.build_providers(creds)" in src
+    still_whitelisted = bool(re.search(
+        r"get_providers\(\s*\{k: v for k, v in \(creds", src))
+    check("HTTP pre-flight uses the same resolver as routing",
+          uses_core and not still_whitelisted,
+          f"uses core.build_providers={uses_core}; old whitelist call remains="
+          f"{still_whitelisted}")
+
+
+def v_engine_commands_delegated_not_duplicated():
+    src = open(os.path.join(ROOT, "src", "aihub.py")).read()
+    delegates = "from loomweaver import cli as _cli" in src
+    covers = all(c in src for c in ("agent", "armada", "eval", "loadtest",
+                                    "usage", "quota", "doctor"))
+    check("aihub delegates engine commands to loomweaver.cli",
+          delegates and covers, f"delegates={delegates}; command coverage={covers}")
+
+
 def main():
     print("=" * 74)
     print("flippy — independent verification of audit findings")
@@ -514,6 +631,9 @@ def main():
                v_cron_new_job, v_loadtest_no_providers, v_aihub_jwt_redaction,
                v_aihub_rag_prints_all, v_armada_readonly_denies_shell_writes,
                v_key_rotation_preserves_cursor,
+               v_key_rotation_reaches_litellm, v_semantic_cache_fronts_the_litellm_path,
+               v_http_and_cli_share_one_brain, v_server_uses_the_same_resolver,
+               v_engine_commands_delegated_not_duplicated,
                v_litellm_is_a_real_dependency, v_aihub_consumes_universal_registry,
                v_aihub_secret_hygiene_is_derived, v_aihub_learns, v_aihub_cli_surface,
                v_no_vibecoded_markers, v_launcher_deleted,

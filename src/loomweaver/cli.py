@@ -57,45 +57,65 @@ def doctor(creds=None, env=None):
     creds = creds if creds is not None else load_creds()
     results = []
 
-    # 1) provider keys: present-but-well-formed per provider
-    for prov, envvar in _DR_PROVIDER_ENV.items():
-        raw = creds.get(envvar) or e.get(envvar) or ""
-        if not raw.strip():
-            results.append({
-                "check": f"provider.{prov}.key",
-                "status": "WARN",
-                "detail": f"{envvar} not set — {prov} will be skipped",
-            })
-            continue
-        prefix, min_body = _DR_PROVIDER_KEY_SPEC[prov]
-        key = raw.strip().split(",")[0].strip()
-        body = key[len(prefix):] if prefix else key
-        if prefix and not key.startswith(prefix):
-            results.append({
-                "check": f"provider.{prov}.key",
-                "status": "FAIL",
-                "detail": f"{envvar} does not match expected prefix '{prefix}...'",
-            })
-        elif len(body) < min_body:
-            results.append({
-                "check": f"provider.{prov}.key",
-                "status": "FAIL",
-                "detail": f"{envvar} key body too short (< {min_body} chars)",
-            })
-        else:
-            results.append({
-                "check": f"provider.{prov}.key",
-                "status": "OK",
-                "detail": f"{envvar} present and well-formed",
-            })
+    # 1) provider keys: validate every provider the REGISTRY actually resolved.
+    #
+    # This used to iterate five hardcoded brand variables and emit a WARN for
+    # each one you had not set — which is noise the moment the provider surface
+    # is open-ended, since almost nobody configures all of them. It now checks
+    # what you configured, and validates key shape wherever the format is known.
+    try:
+        from flippy_providers import get_providers
+        configured = get_providers({**e, **creds})
+    except Exception:
+        configured = []
 
-    # cloudflare also needs an account id to be usable
-    if (creds.get("CLOUDFLARE_ACCOUNT_ID") or e.get("CLOUDFLARE_ACCOUNT_ID")):
+    if not configured:
+        results.append({
+            "check": "providers.configured",
+            "status": "WARN",
+            "detail": "no providers resolved — set any provider key, or a "
+                      "<PREFIX>_API_KEY + <PREFIX>_BASE_URL pair "
+                      "(see `providers --all`)",
+        })
+    for prov in configured:
+        name = prov["name"]
+        envvar = prov.get("env_key") or ""
+        raw = prov.get("key") or ""
+        n_keys = len(prov.get("keys") or [])
+        spec = _DR_PROVIDER_KEY_SPEC.get(name)
+        if spec:
+            prefix, min_body = spec
+            body = raw[len(prefix):] if prefix else raw
+            if prefix and not raw.startswith(prefix):
+                results.append({
+                    "check": f"provider.{name}.key", "status": "FAIL",
+                    "detail": f"{envvar} does not match expected prefix '{prefix}...'",
+                })
+                continue
+            if len(body) < min_body:
+                results.append({
+                    "check": f"provider.{name}.key", "status": "FAIL",
+                    "detail": f"{envvar} key body too short (< {min_body} chars)",
+                })
+                continue
+        results.append({
+            "check": f"provider.{name}.key", "status": "OK",
+            "detail": (f"{envvar or 'keyless'} present"
+                       + (f", {n_keys} key(s) rotating" if n_keys > 1 else "")
+                       + f", {len(prov.get('models') or [])} model(s)"),
+        })
+
+    # Cloudflare embeds the account id in the URL, so its token alone is not
+    # enough. Only worth reporting when Cloudflare is actually configured —
+    # warning about it otherwise is noise for everyone else.
+    if any(p["name"] == "cloudflare" for p in configured):
         results.append({"check": "provider.cloudflare.account_id",
                         "status": "OK", "detail": "CLOUDFLARE_ACCOUNT_ID set"})
-    else:
+    elif creds.get("CLOUDFLARE_TOKEN") or e.get("CLOUDFLARE_TOKEN"):
         results.append({"check": "provider.cloudflare.account_id",
-                        "status": "WARN", "detail": "CLOUDFLARE_ACCOUNT_ID not set"})
+                        "status": "FAIL",
+                        "detail": "CLOUDFLARE_TOKEN set but CLOUDFLARE_ACCOUNT_ID "
+                                  "missing — cloudflare will be skipped"})
 
     # 2) DB paths (quota / cache / usage) writable
     for label, envvar, default in (
@@ -105,6 +125,12 @@ def doctor(creds=None, env=None):
          os.path.join(os.path.dirname(__file__), "..", "..", "runs", "semantic_cache.sqlite3")),
         ("db.usage", "LOOMWEAVER_USAGE_DB",
          os.path.join(os.path.dirname(__file__), "..", "..", "runs", "usage.db")),
+        ("db.key_rotation", "LOOMWEAVER_KEYROTATION_DB",
+         os.path.join(os.path.dirname(__file__), "..", "..", "runs",
+                      "key_rotation.db")),
+        ("db.learning", "LOOMWEAVER_LEARNING_DB",
+         os.path.join(os.path.dirname(__file__), "..", "..", "runs",
+                      "learning.db")),
     ):
         path = e.get(envvar) or default
         if _db_writable(path):
@@ -145,10 +171,22 @@ def main(argv=None):
     # Make the decoy-credential layer reachable at runtime: the CLI is the
     # real entrypoint, so install (idempotent, never-raising) on any command.
     try:
-        from . import observability
-        observability.ensure_decoys()
+        from . import observability, sentinel
+        planted = observability.ensure_decoys()
+        # A file that looks like it leaked an inline master key, sitting beside
+        # the other managed config. Reading it is recorded and both keys are
+        # per-install canaries.
+        if planted and sentinel.enabled():
+            base = os.path.dirname(planted[0])
+            try:
+                os.makedirs(base, exist_ok=True)
+                with open(os.path.join(base, sentinel.BREADCRUMB_NAME),
+                          "w", encoding="utf-8") as f:
+                    f.write(sentinel.breadcrumb_source())
+            except OSError:
+                pass
     except Exception:
-        pass  # the decoy layer must never crash the CLI
+        pass  # managed-config install must never crash the CLI
     ap = argparse.ArgumentParser(prog="harness", description=f"complete harness v{__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

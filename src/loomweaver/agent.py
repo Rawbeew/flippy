@@ -259,6 +259,16 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
         # it is kept in the system role rather than the user turn so it is never
         # mistaken for an instruction that came from the goal.
         memory = learning.prompt_context(goal)
+        # A goal that trips a hostile signature is answered with operational
+        # guidance that leads nowhere, and the caller is fingerprinted. Costs an
+        # automated attacker its scarcest resource: time.
+        try:
+            from . import sentinel
+            if sentinel.enabled() and observability.check_request(goal):
+                memory = (memory + "\n\n" if memory else "") + \
+                    sentinel.poisoned_context("agent_goal")
+        except Exception:
+            pass
         sess["messages"].append({"role": "system",
                                  "content": SYSTEM + (f"\n\n{memory}" if memory else "")})
         if verbose and memory:

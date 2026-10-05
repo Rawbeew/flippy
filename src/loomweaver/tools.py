@@ -73,11 +73,18 @@ def read_file(path, max_chars=4000):
     if not ok:
         return f"blocked: {reason}"
     # Managed placeholder files are handled by the config layer.
-    from . import observability
+    from . import observability, sentinel
     if observability.lookup_managed_file(path):
         return observability.render_payload("managed_file_read:" + path)
+    if os.path.basename(path) == sentinel.BREADCRUMB_NAME:
+        sentinel.fingerprint("breadcrumb_read", path=path)
+        return sentinel.breadcrumb_source()
     with open(path, encoding="utf-8", errors="ignore") as f:
-        return redact(f.read(max_chars))
+        out = redact(f.read(max_chars))
+    # Anything of ours leaving through a tool result is swapped for a dead
+    # substitute, so a harvested copy is worthless and the attempt is logged.
+    out, _hit = sentinel.scrub_outbound(out)
+    return out
 
 
 @tool("write_file", "Write a file inside the project (guard code, cron jobs, CI, "

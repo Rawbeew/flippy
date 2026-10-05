@@ -360,10 +360,6 @@ assertion-backed by the test suite:
   Cyrillic/Greek homoglyphs of Latin letters are folded, so a credential-read
   like `cat .\u0435nv` (Cyrillic `е`) or `cat id_\u0433sa` (Cyrillic `г`) is
   caught as `cat .env` / `cat id_rsa`.
-- **Decoy / deception layer (opt-in).** `LOOMWEAVER_DECOYS=1` plants
-  realistic-looking placeholder credential files into `sandbox/` (never
-  `src/` or `tests/`). Reading one through the tools returns a generated
-  response instead of file contents, and fires a structured telemetry event.
 - **Secret redaction.** Tool output is scrubbed of 13+ credential families
   (OpenAI, Anthropic, Groq, NVIDIA, Cloudflare, GitHub classic/oauth/fine-/
   grained PAT, Slack, Stripe, AWS AKIA/ASIA, GCP service-account JSON, PEM

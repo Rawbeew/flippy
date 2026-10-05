@@ -19,6 +19,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
 import flippy_providers  # noqa: E402
 import loomweaver.core as core  # noqa: E402
+from loomweaver import sentinel  # noqa: E402
+from loomweaver.observability import check_request as _obs_check  # noqa: E402
 
 try:
     from loomweaver import usage as usage_mod
@@ -101,6 +103,29 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ routes
     def do_GET(self):
+        # Paths that only a scanner or an attacker asks for. Answered before the
+        # auth check on purpose: the caller has no token, and there is nothing
+        # real behind these to protect. Each hit is fingerprinted and logged.
+        try:
+            if sentinel.is_looking_glass(self.path):
+                return self._send(200, sentinel.looking_glass_response(self.path))
+            hop = sentinel.redirect_target(
+                int(self.path.rsplit("/", 1)[-1])) if "/_chain/" in self.path else None
+            if hop:
+                # Content-Length: 0 is required — a 302 with no declared body
+                # length leaves an HTTP/1.1 client waiting for a body forever.
+                sentinel.fingerprint("redirect_chain", path=self.path,
+                                     agent=self.headers.get("User-Agent") or "",
+                                     remote=self.client_address[0]
+                                     if self.client_address else "")
+                self.send_response(302)
+                self.send_header("Location", hop)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        except (ValueError, OSError):
+            pass
+
         if not self._authorized():
             self._send(401, {"error": "unauthorized: set FLIPPY_AUTH_TOKEN"})
             return
@@ -148,9 +173,41 @@ class Handler(BaseHTTPRequestHandler):
 
             _bump("flippy_route_calls_total")
 
+            # Inbound inspection. A request carrying a token this process issued
+            # means someone is replaying material they took from us — that is
+            # attribution, and it is worth more than blocking the call.
+            try:
+                blob = json.dumps(messages)[:8000]
+                ua = self.headers.get("User-Agent") or ""
+                remote = self.client_address[0] if self.client_address else ""
+                if sentinel.scan_inbound(blob):
+                    sentinel.fingerprint("canary_replay", path=self.path,
+                                         agent=ua, remote=remote, payload=blob[:500])
+                threat = _obs_check(blob)
+                if threat:
+                    _bump("flippy_route_failures_total")
+                    resp = sentinel.respond_to(threat, path=self.path, agent=ua,
+                                               remote=remote, payload=blob[:500],
+                                               delay=True)
+                    return self._send(200, {
+                        "id": f"chatcmpl-flippy-{int(time.time() * 1000)}",
+                        "object": "chat.completion",
+                        "model": req.get("model") or "",
+                        "choices": [{"index": 0, "finish_reason": "stop",
+                                     "message": {"role": "assistant",
+                                                 "content": resp["body"]}}],
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 0}})
+            except Exception:
+                pass  # inspection must never break a legitimate request
+
             creds = _creds_from_env()
-            if not flippy_providers.get_providers(
-                    {k: v for k, v in (creds or {}).items()}):
+            # Ask the SAME code path routing uses, not a second opinion built
+            # from a hand-maintained variable list. The pre-flight check used to
+            # call get_providers() with only the whitelisted dict, so an
+            # arbitrary <PREFIX>_API_KEY + <PREFIX>_BASE_URL provider resolved
+            # fine for the CLI and aihub but made /v1/chat/completions return
+            # 502 "no providers configured". One resolver, one answer.
+            if not core.build_providers(creds):
                 _bump("flippy_route_failures_total")
                 return self._send(502, {
                     "error": {"message": "no providers configured — set at least "
@@ -167,6 +224,11 @@ class Handler(BaseHTTPRequestHandler):
                            max_tokens=int(req.get("max_tokens") or 1024),
                            creds=creds, on_event=on_event, tools=req_tools)
             # Surface native tool_calls back to the client if the provider made one.
+            if r.get("ok") and isinstance(r.get("text"), str):
+                scrubbed, hit = sentinel.scrub_outbound(r["text"])
+                if hit:
+                    r["text"] = scrubbed
+
             if r.get("ok") and r.get("tool_calls"):
                 return self._send(200, {
                     "id": f"chatcmpl-flippy-{int(time.time() * 1000)}",
@@ -204,10 +266,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {"error": {"message": "internal error", "type": "internal_error"}})
 
 
-# Every variable flippy_providers.get_providers() reads. Keeping this list in
-# sync with the registry is what lets the HTTP endpoint serve the same provider
-# set as the CLI — the bring-your-own OPENAI_API_BASE / ANTHROPIC_BASE_URL path
-# was missing here, so /v1/chat/completions returned "no providers configured"
+# Provider variables lifted out of the environment into the creds dict.
+#
+# This list is NOT the authority on which providers exist — that is
+# flippy_providers, reached through core.build_providers(), which layers these
+# creds over the full process environment. So an arbitrary
+# <PREFIX>_API_KEY + <PREFIX>_BASE_URL pair resolves even though it is not
+# named here; this list only exists so a credentials FILE can override the
+# environment for the well-known brands.
 # for a configuration `loomweaver providers` happily listed.
 _PROVIDER_ENV = ("OPENROUTER_KEY", "FREEINFERENCE_KEY", "CLOUDFLARE_TOKEN",
                  "CLOUDFLARE_ACCOUNT_ID", "NVIDIA_KEY", "GROQ_KEY",

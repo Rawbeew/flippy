@@ -59,10 +59,8 @@ src/
     ├── tools.py          ← tool registry with security guards
     ├── security.py       ← SSRF guard (redirect-safe), path jail, default-deny
     │                        shell allowlist with a read-only tier, env strip
-    ├── observability.py  ← structured run/telemetry events, alerting, and the
-    │                        interception layer (decoy credentials, disguised
-    │                        operator runbook, expansion payload, redirect chain)
-    │                        that diverts a probing model away from real secrets
+    ├── observability.py  ← structured run + telemetry events, alert delivery,
+    │                        and managed runtime configuration under sandbox/
     ├── learning.py       ← self-learning memory: outcome priors for the router,
     │                        an inferred user profile, and similarity-retrieved
     │                        lessons injected into the system prompt

@@ -114,16 +114,40 @@ def build_router_models():
     return out
 
 
+def _litellm_name(provider_name, model):
+    """The litellm-prefixed model id. The prefix is per-provider knowledge."""
+    if provider_name == "groq":
+        return f"groq/{model}"
+    return f"openai/{model}"
+
+
+def build_deployments():
+    """One litellm deployment per (LIVE key, model), across every provider.
+
+    This is the join to the loomweaver engine. The naive version — one entry
+    per provider using `provider["key"]` — pins every request to the first key
+    in a comma-separated list and burns its quota while the rest sit idle, and
+    it keeps handing out keys the rotation state has already retired.
+    """
+    from flippy_providers import get_providers
+    from loomweaver import hub
+    out = []
+    for p in get_providers():
+        name = p["name"]
+        if name == "cloudflare":
+            # litellm's Cloudflare shape puts the account in the base URL
+            acc = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "")
+            p = dict(p)
+            p["litellm_base"] = (
+                f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai")
+        out.extend(hub.key_deployments(p, lambda m, _n=name: _litellm_name(_n, m)))
+    return out
+
+
 def build_router():
     """Build a litellm Router with the configured providers. Returns (router, litellm)."""
     import litellm
-    model_list = []
-    for lit_name, friendly, key, api_base in build_router_models():
-        entry = {"model_name": friendly,
-                 "litellm_params": {"model": lit_name, "api_key": key}}
-        if api_base:
-            entry["litellm_params"]["api_base"] = api_base
-        model_list.append(entry)
+    model_list = build_deployments()
     if not model_list:
         raise RuntimeError(
             "no providers configured. Any OpenAI-compatible endpoint works: set "
@@ -138,6 +162,14 @@ def build_router():
         cooldown_time=60,
         enable_pre_call_checks=True,
     ), litellm
+
+
+# The engine bridge. Imported once at module scope so every call site shares
+# the same view; guarded so aihub still imports if loomweaver is missing.
+try:
+    from loomweaver import hub
+except Exception:  # pragma: no cover - aihub must remain importable alone
+    hub = None
 
 
 # ---------- Token-savings + smart routing ----------
@@ -156,31 +188,47 @@ def smart_chat(messages, simple=False, use_rag=False, top_k=3, model=None,
     if not model:
         model = "deepseek-v4-flash" if simple else "minimax-m3"
 
-    # Self-learning: remember which model actually answered, how long it took,
-    # and whether it worked, so routing improves across restarts. Imported lazily
-    # so aihub still runs if loomweaver is unavailable.
-    import time as _time
-    _t0 = _time.time()
-    _learn = None
-    try:
-        from loomweaver import learning as _learn_mod
-        _learn = _learn_mod
-    except Exception:
-        _learn = None
+    # ---- the loomweaver engine, in front of and behind the litellm call ----
+    # aihub is the front door; the cache, quota ledger, key rotation, usage
+    # analytics and learning memory are the engine. They are not optional
+    # decorations: without this join a near-duplicate prompt re-bills a
+    # provider and a quota-exhausted provider keeps being tried until
+    # litellm's own cooldown happens to notice.
+    if hub is None:
+        raise RuntimeError(
+            "the loomweaver engine is required: aihub routes through litellm but "
+            "relies on loomweaver for key rotation, the semantic cache, the quota "
+            "ledger, usage analytics and the learning memory. Install the package "
+            "so `from loomweaver import hub` resolves.")
 
+    if cache:
+        hit = hub.cache_get(messages)
+        if hit:
+            hub.record_outcome("cache", model, True, 0.0, cached=True)
+            return {"content": hit["text"], "model": model, "prompt_tokens": 0,
+                    "completion_tokens": 0, "cache_read": 0,
+                    "cached": True, "similarity": hit["similarity"]}
+
+    allowed, reason = hub.quota_check(model)
+    if not allowed:
+        raise RuntimeError(f"provider quota exhausted for {model}: {reason}")
+
+    _t0 = hub.timed()
     try:
         resp = router.completion(model=model, messages=messages,
-                                 max_tokens=max_tokens, caching=cache)
+                                 max_tokens=max_tokens, caching=False)
     except Exception as e:
-        if _learn:
-            _learn.record_route(messages, "litellm", model, False,
-                                _time.time() - _t0, 1)
-            _learn.note_failure(messages, _safe_message(e))
+        status = getattr(e, "status_code", None) or getattr(e, "status", None)
+        hub.record_outcome(model, model, False, hub.since(_t0), status=status,
+                           goal=messages)
+        try:
+            from loomweaver import learning
+            learning.note_failure(messages, _safe_message(e))
+        except Exception:
+            pass
         # Full-Key rule: an auth failure must never surface the configured key.
         raise RuntimeError(f"completion failed: {_safe_message(e)}") from None
-    if _learn:
-        _learn.record_route(messages, "litellm", model, True,
-                            _time.time() - _t0, 1)
+
     c = resp["choices"][0]["message"]["content"]
     usage = resp.get("usage") or {}
     cache_read = 0
@@ -190,10 +238,14 @@ def smart_chat(messages, simple=False, use_rag=False, top_k=3, model=None,
             cache_read = ptd.get("cached_tokens", 0)
     except Exception:
         cache_read = 0
+    hub.record_outcome(model, resp.get("model") or model, True, hub.since(_t0),
+                       usage=usage, status=200, goal=messages)
+    if cache:
+        hub.cache_put(messages, c, model_tag=model)
     return {"content": c, "model": resp.get("model"),
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
-            "cache_read": cache_read}
+            "cache_read": cache_read, "cached": False}
 
 
 def summarize(text, max_words=80, model="deepseek-v4-flash"):
@@ -381,30 +433,76 @@ def vision(image_path, prompt, model="minimax-m3"):
 
 # ---------- Tool / function-calling demo ----------
 def tooltest():
-    """Exercise function calling: the model decides to call get_weather."""
-    import urllib.request, urllib.error
-    key = os.environ.get("FREEINFERENCE_KEY")
-    if not key:
-        raise RuntimeError("FREEINFERENCE_KEY required")
+    """Exercise function calling through the router and the guarded tool registry.
+
+    Previously this hand-rolled a raw `urlopen` against one hardcoded provider:
+    no SSRF guard, no redaction, no failover, and it bypassed the registry
+    entirely. It now goes through the same litellm Router as `smart_chat`, and
+    any tool the model asks for is dispatched via `loomweaver.tools`, so it is
+    subject to the same allowlist, path jail and redaction as the agent.
+    """
+    router, _litellm = build_router()
     tools = [{"type": "function",
               "function": {"name": "get_weather",
                            "description": "Get current weather for a city",
                            "parameters": {"type": "object",
                                          "properties": {"city": {"type": "string"}},
                                          "required": ["city"]}}}]
-    body = {"model": "minimax-m3",
-            "messages": [{"role": "user", "content": "What's the weather in Lagos?"}],
-            "tools": tools, "max_tokens": 256}
-    req = urllib.request.Request("https://freeinference.org/v1/chat/completions",
-        data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {key}",
-                 "Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        d = json.loads(r.read().decode())
-    return d["choices"][0]["message"]
+    t0 = hub.timed()
+    try:
+        resp = router.completion(model="minimax-m3",
+                                 messages=[{"role": "user",
+                                            "content": "What's the weather in Lagos?"}],
+                                 tools=tools, max_tokens=256, caching=False)
+    except Exception as e:
+        hub.record_outcome("minimax-m3", "minimax-m3", False, hub.since(t0))
+        raise RuntimeError(f"tool call failed: {_safe_message(e)}") from None
+    hub.record_outcome("minimax-m3", resp.get("model") or "minimax-m3", True,
+                       hub.since(t0), usage=resp.get("usage") or {}, status=200)
+    msg = resp["choices"][0]["message"]
+    # If the model asked for a real registered tool, run it through the guards
+    # rather than trusting the request.
+    for call in (msg.get("tool_calls") or []):
+        fn = (call.get("function") or {})
+        name = fn.get("name") or call.get("name")
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except (ValueError, TypeError):
+            args = {}
+        try:
+            from loomweaver import tools as _tools, observability as _obs
+            if name in _tools.TOOLS:
+                obs, intercepted = _obs.safe_invoke(name, args, _tools.dispatch)
+                msg.setdefault("tool_results", {})[name] = (
+                    "[intercepted]" if intercepted else obs[:500])
+        except Exception as e:
+            msg.setdefault("tool_results", {})[name] = f"unavailable: {_safe_message(e)}"
+    return msg
 
 
 # ---------- CLI ----------
+# Engine commands that aihub delegates to the loomweaver CLI rather than
+# re-implementing. One front door, one implementation.
+ENGINE_COMMANDS = ("agent", "armada", "eval", "eval-compare", "loadtest", "usage",
+                   "quota", "doctor", "check-config", "cron", "ttft", "providers")
+
+
+def run_engine(argv):
+    """Forward to `python -m loomweaver <argv>`. Returns its exit code."""
+    try:
+        from loomweaver import cli as _cli
+    except Exception as e:
+        print(f"engine unavailable: {_safe_message(e)}")
+        return 1
+    try:
+        return int(_cli.main(list(argv)) or 0)
+    except SystemExit as e:          # argparse exits are normal, not failures
+        return int(e.code or 0)
+    except Exception as e:
+        print(f"engine command failed: {_safe_message(e)}")
+        return 1
+
+
 def print_profile():
     """What flippy has learned. Works with or without loomweaver installed."""
     try:
@@ -415,12 +513,22 @@ def print_profile():
 
 
 def health():
-    providers = build_router_models()
-    print(f"providers ({len(providers)}):")
-    for lit, friendly, _key, _base in providers:
-        print(f"  - {friendly}  (litellm={lit})")
-    if not providers:
-        print("  (none — set at least one provider env var)")
+    deployments = build_deployments()
+    providers = sorted({d["metadata"]["provider"] for d in deployments})
+    keys = len({(d["metadata"]["provider"], d["metadata"]["key_index"])
+                for d in deployments})
+    models = sorted({d["model_name"] for d in deployments})
+    print(f"providers ({len(providers)}): {', '.join(providers) or 'none'}")
+    print(f"live keys: {keys}   models: {len(models)}   "
+          f"litellm deployments: {len(deployments)}")
+    for m in models:
+        print(f"  - {m}")
+    if not deployments:
+        print("  (none — set at least one provider env var; "
+              "`--all-providers` lists every option)")
+    print("\nengine services:")
+    for name, on in hub.services().items():
+        print(f"  [{'on ' if on else 'off'}] {name}")
 
 
 def main():
@@ -448,6 +556,14 @@ def main():
                     help="show what flippy has learned about you")
     ap.add_argument("--learn", help="teach flippy a rule to apply to similar prompts")
     ap.add_argument("--forget", action="store_true", help="erase learned lessons")
+    # engine passthrough: the agent, fleets, evals, benchmarks and dashboards
+    # all live in loomweaver, so aihub forwards instead of duplicating them
+    ap.add_argument("--agent", help="run the autonomous agent on a goal")
+    ap.add_argument("--tools", help="comma-separated tool scope for --agent")
+    ap.add_argument("--max-steps", type=int, default=0, help="step cap for --agent")
+    ap.add_argument("--engine", choices=ENGINE_COMMANDS,
+                    help="forward to the loomweaver engine (agent, armada, eval, "
+                         "loadtest, usage, quota, doctor, cron, ttft, providers)")
     a = ap.parse_args()
     if a.health:
         health(); return
@@ -474,6 +590,13 @@ def main():
         except Exception as e:
             print(f"could not store lesson: {_safe_message(e)}")
         return
+    if a.agent:
+        # the autonomous agent lives in loomweaver; aihub just hands it the goal
+        sys.exit(run_engine(["agent", a.agent]
+                            + (["--tools", a.tools] if a.tools else [])
+                            + (["--max-steps", str(a.max_steps)] if a.max_steps else [])))
+    if a.engine:
+        sys.exit(run_engine([a.engine] + list(a.args)))
     if a.forget:
         try:
             from loomweaver import learning

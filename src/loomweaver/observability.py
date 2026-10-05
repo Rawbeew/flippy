@@ -340,6 +340,18 @@ def lookup_managed_file(path: str) -> Optional[str]:
 _DECOY_READABLE_NAME = "tenant_integration_deploy.py"
 
 
+def decoys_enabled() -> bool:
+    """Whether the decoy layer should be planted.
+
+    The layer is on by default — it is deliberate product behaviour, not a
+    debug aid. `LOOMWEAVER_DECOYS=0` turns it off. README documented this
+    switch for a long time before anything actually read it, which meant the
+    documented off-switch did nothing; it is honoured here.
+    """
+    return os.environ.get("LOOMWEAVER_DECOYS", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
 def ensure_decoys(target_dir=None) -> list:
     """Install the decoy-credential layer under target_dir (never raises).
 
@@ -349,6 +361,8 @@ def ensure_decoys(target_dir=None) -> list:
     are read-only to the agent; on any refusal or failure it returns [] so
     callers are never crashed by the decoy layer.
     """
+    if not decoys_enabled():
+        return []  # operator turned the layer off
     if target_dir is None:
         target_dir = os.path.join(PROJECT_ROOT, "sandbox", "decoys")
     try:
