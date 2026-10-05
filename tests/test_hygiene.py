@@ -114,7 +114,11 @@ def test_trim_preserves_system_when_first_message_is_user(tmp_path):
     runs_dir = tempfile.mkdtemp(dir=tmp_path)
     with mock.patch("loomweaver.agent.route", side_effect=responses), \
          mock.patch("loomweaver.agent.SessionStore", lambda: store):
-        result = agent_mod.run("some goal", runs_dir=runs_dir, creds={})
+        # fresh=False: exercise the TRIM contract on a session whose prior
+        # messages persist (continuity path). The zero-trust default (fresh=True)
+        # wipes prior messages before the trim, so the system-later-than-0 case
+        # only arises when the operator opts into continuity — that path here.
+        result = agent_mod.run("some goal", runs_dir=runs_dir, creds={}, fresh=False)
     assert saved_sess, "run() did not save the session"
     msgs = saved_sess[-1]["messages"]
     assert len(msgs) <= am.MAX_SESSION_MESSAGES

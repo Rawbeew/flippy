@@ -204,12 +204,25 @@ NUDGE_MAX = 2     # consecutive no-progress nudges before we stop the run
 
 
 def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=None, verbose=True,
-        native_tools=True, tool_scope="auto"):
+        native_tools=True, tool_scope="auto", fresh=True):
     """tool_scope: 'auto' (context-determined minimal set), 'all' (every tool),
-    or an explicit list of tool names to force exactly that set."""
+    or an explicit list of tool names to force exactly that set.
+
+    fresh=True (default): START from a clean system+goal; do NOT replay a prior
+    run's message history (agent-written assistant/tool turns) into this goal's
+    context. Prior runs on the same session_id are agent-controlled and could
+    have been manipulated (session-replay prompt injection); zero-trust means a
+    new goal does not inherit them as trusted instructions. 'facts' (remember)
+    data is still loaded and saved. Set fresh=False only when you explicitly
+    want to continue a multi-turn conversation across CLI calls."""
     runlog = RunLog(runs_dir)
     store = SessionStore()
     sess = store.load(session_id or "default")
+    if fresh:
+        # zero-trust: never replay prior-run messages into a NEW goal. A prior
+        # run on this session is agent-controlled; a poisoned turn could inject
+        # instructions. Keep 'facts' + id, drop the turn history.
+        sess["messages"] = []
     if not sess["messages"]:
         sess["messages"].append({"role": "system", "content": SYSTEM})
     sess["messages"].append({"role": "user", "content": f"GOAL: {goal}"})
