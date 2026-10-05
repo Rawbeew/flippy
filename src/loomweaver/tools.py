@@ -34,8 +34,18 @@ def http_get(url, max_chars=2000):
 KEY_REDACT_RE = re.compile(
     r"(?i)(sk-[a-z0-9_-]{10,}|gsk_[a-z0-9]{20,}|nvapi-[a-z0-9_-]{10,}|"
     r"cfut_[a-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|"
-    r"AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{20,}|xai-[a-z0-9]{20,})"
+    r"AKIA[A-Z0-9]{16}|ASIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{20,}|xai-[a-z0-9]{20,}|"
+    r"gho_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|"
+    r"ghr_[A-Za-z0-9]{20,}|"
+    r"xox[bpasr]-[A-Za-z0-9-]{20,}|"
+    r"sk_live_[A-Za-z0-9]{20,}|sk_test_[A-Za-z0-9]{20,}|"
+    r"rk_live_[A-Za-z0-9]{20,}|rk_test_[A-Za-z0-9]{20,}|"
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----|"
+    r"\btype\b\s*:\s*\"\bservice_account\b\"[\s\S]{0,500}?private_key\b\s*:\s*\"|"
+    r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
 )
+
+
 
 
 def redact(text: str) -> str:

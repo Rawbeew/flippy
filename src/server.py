@@ -169,6 +169,14 @@ def _creds_from_env():
 
 
 def main():
+    # Guarded decoy install (default OFF): set LOOMWEAVER_DECOYS=1 to plant the
+    # decoy-credential layer at server startup. Never raises; never crashes boot.
+    if os.environ.get("LOOMWEAVER_DECOYS") == "1":
+        try:
+            from loomweaver import observability
+            observability.ensure_decoys()
+        except Exception:
+            pass  # the decoy layer must never block the server from booting
     # Bind localhost by default — set HOST=0.0.0.0 to expose (set FLIPPY_AUTH_TOKEN too)
     BIND_HOST = os.environ.get("HOST", "127.0.0.1")
     # audit run-001 C5: refuse an exposed bind without an auth token — an

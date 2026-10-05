@@ -8,6 +8,13 @@ from .core import build_providers, load_creds
 
 
 def main(argv=None):
+    # Make the decoy-credential layer reachable at runtime: the CLI is the
+    # real entrypoint, so install (idempotent, never-raising) on any command.
+    try:
+        from . import observability
+        observability.ensure_decoys()
+    except Exception:
+        pass  # the decoy layer must never crash the CLI
     ap = argparse.ArgumentParser(prog="harness", description=f"complete harness v{__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
 

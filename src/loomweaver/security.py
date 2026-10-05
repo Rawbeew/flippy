@@ -17,6 +17,7 @@ import ipaddress
 import os
 import re
 import socket
+import unicodedata
 import urllib.parse
 
 # ------------------------------------------------------- configuration
@@ -35,6 +36,51 @@ BLOCKED_URL_HOSTS = {
     "localhost",
 }
 
+# ---------------------------------------------------------------------------
+# Input normalisation (FIX 4): fold invisible / homoglyph / compatibility
+# characters so an obfuscated credential-read or SSRF target can't dodge the
+# pattern guards. Runs before every classifier below. Self-contained (stdlib
+# only); the technique mirrors the loonyjail normalizer (reference only).
+# ---------------------------------------------------------------------------
+
+_ZERO_WIDTH = set("\u200B\u200C\u200D\uFEFF\u2060\u180E")
+_BIDI = set("\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069")
+_SOFT_HYPHEN = "\u00AD"
+_INVISIBLE = _ZERO_WIDTH | _BIDI | {_SOFT_HYPHEN}
+
+# latin -> Cyrillic/Greek look-alikes (subset of Unicode confusables.txt)
+_HOMOGLYPHS = {
+    "a": set("а"), "c": set("с"), "e": set("е"), "o": set("о"),
+    "p": set("р"), "x": set("х"), "y": set("у"), "i": set("і"),
+    "j": set("ј"), "s": set("ѕ"), "h": set("һ"), "k": set("к"),
+    "m": set("м"), "n": set("и"),
+    "r": set("г"), "l": set("ӏ"), "w": set("ԝ"),
+    "B": set("В"), "H": set("Н"), "K": set("К"), "M": set("М"),
+    "O": set("О"), "P": set("Р"), "T": set("Т"), "X": set("Х"),
+    "Y": set("Ү"),
+}
+_CONFUSABLE_TO_LATIN = {
+    c: latin for latin, confusables in _HOMOGLYPHS.items() for c in confusables
+}
+
+
+def _normalize(text):
+    """Fold NFKC + strip zero-width/BIDI/soft-hyphen + fold homoglyphs.
+
+    Never raises, never returns None — on any failure it degrades to the raw
+    input so a classified string is never dropped by the normaliser itself.
+    """
+    try:
+        text = unicodedata.normalize("NFKC", str(text))
+        out = []
+        for ch in text:
+            if ch in _INVISIBLE:
+                continue  # strip invisible/control characters
+            out.append(_CONFUSABLE_TO_LATIN.get(ch, ch))
+        return "".join(out)
+    except Exception:
+        return str(text)
+
 
 def _resolve_host_ips(host):
     try:
@@ -45,6 +91,7 @@ def _resolve_host_ips(host):
 
 def check_url(url):
     """SSRF guard. Returns (ok, reason)."""
+    url = _normalize(url)
     try:
         parsed = urllib.parse.urlparse(url)
     except Exception:
@@ -84,7 +131,7 @@ def check_path(path):
     """
     foreign_windows = bool(re.match(r"^[A-Za-z]:[\\/]", path)) or (
         "\\" in path and os.sep != "\\")
-    p = os.path.realpath(path)
+    p = os.path.realpath(_normalize(path))
     name = os.path.basename(p).lower()
     parts = Path(p).parts
 
@@ -127,25 +174,63 @@ WRITE_DENY = [
 ]
 
 
-def check_write_path(path: str):
-    """Write-jail: same rules as check_path, plus the write deny-set.
+# ---------------------------------------------------------------------------
+# Agent-writable roots (FIX 3): single source of truth for write-jail allows.
+# Env-overridable allowlist (LOOMWEAVER_WRITE_ROOTS=", ".-joined names).
+# Default: sandbox/, data/, extracted/, plus top-level repo-root data files.
+# ---------------------------------------------------------------------------
 
-    Agent tool writes are restricted to sandbox/, extracted/, and the repo
-    root for data files; guard code, cron jobs, CI, session/run state, and
-    build config are read-only to the agent.
+_AGENT_WRITE_ROOTS_DEFAULT = ["sandbox", "data", "extracted"]
+
+
+def agent_write_roots() -> list:
+    """Resolve the agent-writable root names (env-overridable, never raises)."""
+    csv = os.environ.get("LOOMWEAVER_WRITE_ROOTS")
+    if csv:
+        roots = []
+        for r in csv.split(","):
+            r = r.strip().strip("\\/")
+            if r and r not in roots:
+                roots.append(r)
+        return roots or list(_AGENT_WRITE_ROOTS_DEFAULT)
+    return list(_AGENT_WRITE_ROOTS_DEFAULT)
+
+
+
+
+def check_write_path(path: str):
+    """Write-jail: base read-jail rules, then the agent-writable allowlist.
+
+    A path is writable only if it lands inside one of the allowed roots
+    (sandbox/, data/, extracted/ by default, or a repo-root data file) and is
+    not a protected path from the deny-set (guard code, tests, cron jobs, CI,
+    session/run state, build config). The deny-set always wins: an allowlist
+    match never un-blocks a protected path.
     """
     ok, reason = check_path(path)
     if not ok:
         return ok, reason
-    p = os.path.realpath(path)
+    p = os.path.realpath(_normalize(path))
     rel = os.path.relpath(p, PROJECT_ROOT)
-    # normalize separators for the deny check
+    # normalize separators for the guards
     rel_norm = rel.replace("\\", "/") if os.sep == "\\" else rel
+    # deny-set first (highest priority) — these are never agent-writable
     for name, what in WRITE_DENY:
         marker = name.replace("\\", "/")
         if rel_norm == marker.rstrip("/") or rel_norm.startswith(marker):
             return False, f"write denied: {what} is read-only to the agent"
-    return True, ""
+    # allowlist roots govern
+    for root in agent_write_roots():
+        if rel_norm == root or rel_norm.startswith(root + "/"):
+            return True, ""
+    # a top-level repo-root data file (no subdirectory, not denied above)
+    if "/" not in rel_norm:
+        return True, ""
+    return False, (
+        f"write denied: {rel_norm} is outside agent-writable roots "
+        f"({', '.join(agent_write_roots())}/)"
+    )
+
 
 
 from pathlib import Path  # noqa: E402  (used above)
@@ -191,8 +276,36 @@ SHELL_BLOCKED_PATTERNS = [
 SHELL_ALLOWED_FIRST_WORDS = None
 
 
+def _extract_target_urls(text):
+    """Pull http(s) URLs and bare host:port targets from shell command text.
+
+    Reused by check_shell so a command that reaches a private/metadata URL is
+    rejected by the SAME SSRF guard as http_get/http_post_json (no duplicated
+    IP logic). Returns a list of URL strings; never raises.
+    """
+    targets = []
+    for m in re.finditer(r"https?://[^\s'\"`>]+\s?", text):
+        u = m.group(0).strip().rstrip("'\"`,.;:)]}")
+        if u:
+            targets.append(u)
+    # bare host:port (e.g. `curl 127.0.0.1:8080/x` or `nmap host:443`)
+    for m in re.finditer(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?):\d{2,5}\b", text):
+        hostport = m.group(0)
+        targets.append("http://" + hostport)
+    return targets
+
+
+
+
 def check_shell(cmd):
-    """Shell guard. Returns (ok, reason)."""
+    """Shell guard. Returns (ok, reason).
+
+    Normalises the command (fold homoglyphs/invisible chars) then runs the
+    dangerous-pattern deny-set, the optional allowlist, and the same SSRF
+    guard as http_get: any http(s) URL or bare host:port target in the
+    command that reaches a blocked/private/metadata address is rejected.
+    """
+    cmd = _normalize(cmd)
     low = cmd.lower()
     for pat in SHELL_BLOCKED_PATTERNS:
         if re.search(pat, low):
@@ -201,6 +314,10 @@ def check_shell(cmd):
         first = cmd.strip().split()[0] if cmd.strip() else ""
         if first not in SHELL_ALLOWED_FIRST_WORDS:
             return False, f"command '{first}' not in allowlist"
+    for url in _extract_target_urls(cmd):
+        ok, reason = check_url(url)
+        if not ok:
+            return False, f"blocked shell target: {url} ({reason})"
     return True, ""
 
 

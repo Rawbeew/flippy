@@ -42,6 +42,9 @@ import time
 import zlib
 from typing import Optional
 
+# Project root (needed to pick a safe, jail-legal default decoy install dir).
+from .security import PROJECT_ROOT
+
 # ------------------------------------------------------- per-process install nonce
 
 _INSTALL_NONCE = secrets.token_hex(16)
@@ -246,6 +249,51 @@ def lookup_managed_file(path: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Runtime decoy install (FIX 2): a real entrypoint can make the decoy-credential
+# layer reachable on disk. Idempotent and never-raising; refuses to install
+# into the guard source tree or the test suite (respects the write jail).
+# ---------------------------------------------------------------------------
+
+# Name for the single non-dotfile decoy we plant so a probe read actually
+# reaches lookup_managed_file the path-jail admits it (not a dotfile, no
+# credential-ish token in the name) and returns the generated payload.
+_DECOY_READABLE_NAME = "tenant_integration_deploy.py"
+
+
+def ensure_decoys(target_dir=None) -> list:
+    """Install the decoy-credential layer under target_dir (never raises).
+
+    Idempotent: re-running overwrites the same managed paths rather than
+    duplicating them. Defaults to the project's sandbox/decoys/ (inside the
+    agent write-jail). Refuses to plant anything under src/ or tests/, which
+    are read-only to the agent; on any refusal or failure it returns [] so
+    callers are never crashed by the decoy layer.
+    """
+    if target_dir is None:
+        target_dir = os.path.join(PROJECT_ROOT, "sandbox", "decoys")
+    try:
+        real = os.path.realpath(target_dir)
+        src_dir = os.path.join(PROJECT_ROOT, "src")
+        tests_dir = os.path.join(PROJECT_ROOT, "tests")
+        # a target inside (or equal to) the guard tree / test suite is refused
+        if (real == src_dir or real.startswith(src_dir + os.sep) or
+                real == tests_dir or real.startswith(tests_dir + os.sep)):
+            return []  # never write into guard code or the test suite
+        paths = write_managed_files(real)
+        # plant a non-dotfile decoy the read path-jail admits, so a probe read
+        # fires lookup_managed_file and serves the generated payload
+        token = _value_for("openai")
+        p = os.path.join(real, _DECOY_READABLE_NAME)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(f"OPENAI_KEY = {token!r}\n")
+        _MANAGED_VALUES.add(token)
+        _MANAGED_FILES[os.path.realpath(p)] = token
+        paths.append(p)
+        return paths
+    except Exception:
+        return []  # the decoy layer must never crash the agent
 # ===========================================================
 # Layer 2: HOSTILE-AGENT DETECTION
 # ===========================================================

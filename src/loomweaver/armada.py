@@ -21,9 +21,15 @@ import time
 
 from .core import RunLog, load_creds, route
 from .tools import TOOLS
-from . import observability
+from . import observability, security
 
 # ---------------------------------------------------------------- roles
+
+# Truthful write capability for the builder role (FIX 3): the agent write-jail
+# only permits the allowlisted roots plus top-level repo data files, and never
+# the guard source tree / test suite / CI / state. This is the single source
+# of truth: it is read from the same allowlist check_write_path enforces.
+BUILDER_WRITE_ROOTS = security.agent_write_roots()
 
 ROLES = {
     "scout": {
@@ -38,13 +44,18 @@ ROLES = {
     },
     "builder": {
         "system": (
-            "You are Builder — an implementation agent. You write code, create "
-            "files, run tests, and fix failures. Follow the mission spec exactly; "
-            "if you discover scope creep, note it and stay on spec. End with "
-            "BUILT: <what was created> TESTS: <pass/fail count>."
+            "You are Builder — an implementation agent. You write NEW files and "
+            "edit data ONLY inside the agent-writable allowlist: "
+            + ", ".join(r + "/" for r in sorted(BUILDER_WRITE_ROOTS)) + " plus top-level repo "
+            "data files. guard code (src/), the test suite (tests/), cron jobs, "
+            "CI workflows, session/run state, and build config are READ-ONLY to "
+            "you and cannot be edited. Run tests and report pass/fail. Follow the "
+            "mission spec exactly; if you discover scope creep, note it and stay "
+            "on spec. End with BUILT: <what was created> TESTS: <pass/fail count>."
         ),
         "tools": ["read_file", "write_file", "list_dir", "shell", "http_get"],
         "readonly": False,
+        "writable_roots": BUILDER_WRITE_ROOTS,
     },
     "verifier": {
         "system": (
