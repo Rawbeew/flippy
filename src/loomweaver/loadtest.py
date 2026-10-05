@@ -10,9 +10,13 @@ def _one_request(prov, prompt, max_tokens):
     t0 = time.time()
     r = chat(prov, [{"role": "user", "content": prompt}], max_tokens=max_tokens)
     lat = time.time() - t0
+    # Words, not tokens: this counts whitespace-split words, and we have no
+    # tokenizer here. Named wps so the JSON cannot be read as a token rate.
+    # (benchmarks/run_bench.py is the one that reports a true tokens/sec, taken
+    # from the provider's own usage.completion_tokens.)
     n_out = len((r.get("text") or "").split())
     return {"ok": r.get("ok"), "latency": round(lat, 3),
-            "tps": round(n_out / lat, 1) if (r.get("ok") and lat > 0) else 0,
+            "wps": round(n_out / lat, 1) if (r.get("ok") and lat > 0) else 0,
             "error": (r.get("error") or "")[:120] if not r.get("ok") else None}
 
 
@@ -52,7 +56,7 @@ def run(provider=None, concurrency=4, requests=8, prompt="Write a 100-word story
         "latency_max": round(max(r["latency"] for r in oks), 2) if oks else None,
         "throughput_rps": round(len(oks) / total_latency * concurrency, 2)
         if oks and total_latency > 0 else 0,
-        "avg_tps": round(statistics.mean([r["tps"] for r in oks]), 1) if oks else 0,
+        "avg_wps": round(statistics.mean([r["wps"] for r in oks]), 1) if oks else 0,
     }
     runlog.emit({"type": "loadtest_summary", **summary})
     return summary

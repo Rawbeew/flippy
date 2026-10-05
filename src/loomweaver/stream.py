@@ -58,4 +58,5 @@ def stream_chat(prov, messages, model=None, max_tokens=2000, timeout=120):
     gen_time = max(total - ttft, 0.001)
     return {"ok": True, "ttft": round(ttft, 3), "latency": round(total, 3),
             "text": text, "words": n_words,
-            "tps": round(n_words / gen_time, 1) if gen_time > 0 else 0}
+            # words/sec, not tokens/sec — see loadtest._one_request
+            "wps": round(n_words / gen_time, 1) if gen_time > 0 else 0}

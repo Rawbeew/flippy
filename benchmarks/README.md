@@ -12,7 +12,9 @@ small chat completions** at the provider's first model and records:
 |---|---|
 | Success rate | % of requests returning HTTP 200 with valid JSON |
 | Latency p50 / p95 | Time-to-complete-response, seconds (all attempts counted) |
-| Tokens/sec | Completion tokens ÷ generation time, averaged over successes |
+| Tokens/sec | Completion tokens ÷ generation time, averaged over successes. Taken from the provider's own `usage.completion_tokens`, so it is a true token rate |
+
+Note: this is the only place in flippy that reports tokens/sec. `loomweaver loadtest` and `loomweaver ttft` report **words**/sec under the key `wps` — they count whitespace-split words and have no tokenizer.
 
 ## Methodology
 

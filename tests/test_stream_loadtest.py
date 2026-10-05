@@ -76,7 +76,7 @@ class TestStreamChat:
         assert res["ok"] is True
         assert res["text"] == "hello brave world"
         assert res["words"] == 3
-        assert res["ttft"] >= 0 and res["tps"] > 0
+        assert res["ttft"] >= 0 and res["wps"] > 0
 
     def test_the_done_marker_stops_the_read(self, stream_lines):
         stream_lines["lines"] = [sse("one"), "data: [DONE]", sse("never seen")]
@@ -165,16 +165,38 @@ def fake_chat(monkeypatch):
     return holder
 
 
+class TestMetricNamesAreHonest:
+    """loadtest/stream count whitespace-split words, not tokens, and have no
+    tokenizer. The keys must say so. benchmarks/run_bench.py is the only place
+    that reports a real tokens/sec (from usage.completion_tokens)."""
+
+    def test_loadtest_reports_wps_not_tps(self, fake_chat):
+        row = loadtest._one_request(PROV, "hi", 100)
+        assert "wps" in row and "tps" not in row
+
+    def test_the_loadtest_summary_averages_words(self, tmp_path, fake_providers,
+                                                  fake_chat):
+        s = loadtest.run(provider="groq", concurrency=1, requests=1,
+                         runs_dir=str(tmp_path))
+        assert "avg_wps" in s and "avg_tps" not in s
+
+    def test_stream_reports_wps_not_tps(self, stream_lines):
+        stream_lines["lines"] = [sse("one two three"), "data: [DONE]"]
+        res = stream.stream_chat(PROV, [{"role": "user", "content": "hi"}])
+        assert "wps" in res and "tps" not in res
+        assert res["words"] == 3
+
+
 class TestOneRequest:
     def test_success_reports_latency_and_throughput(self, fake_chat):
         r = loadtest._one_request(PROV, "hi", 100)
         assert r["ok"] is True and r["error"] is None
-        assert r["latency"] >= 0 and r["tps"] >= 0
+        assert r["latency"] >= 0 and r["wps"] >= 0
 
     def test_a_failure_carries_a_truncated_error(self, fake_chat):
         fake_chat["reply"] = {"ok": False, "error": "x" * 500}
         r = loadtest._one_request(PROV, "hi", 100)
-        assert r["ok"] is False and r["tps"] == 0
+        assert r["ok"] is False and r["wps"] == 0
         assert len(r["error"]) == 120, "errors must be capped at 120 chars"
 
     def test_a_failure_without_an_error_message_is_still_safe(self, fake_chat):
@@ -207,7 +229,7 @@ class TestRun:
         assert s["success"] == 4 and s["fail"] == 0
         assert s["provider"] == "groq" and s["requests"] == 4
         assert s["latency_p50"] is not None and s["latency_max"] is not None
-        assert s["throughput_rps"] >= 0 and s["avg_tps"] >= 0
+        assert s["throughput_rps"] >= 0 and s["avg_wps"] >= 0
 
     def test_an_all_failing_run_reports_none_latencies_not_a_crash(
             self, tmp_path, fake_providers, fake_chat):
@@ -216,7 +238,7 @@ class TestRun:
                          runs_dir=str(tmp_path))
         assert s["success"] == 0 and s["fail"] == 3
         assert s["latency_p50"] is None and s["latency_max"] is None
-        assert s["throughput_rps"] == 0 and s["avg_tps"] == 0
+        assert s["throughput_rps"] == 0 and s["avg_wps"] == 0
 
     def test_the_run_log_records_start_per_request_and_summary(self, tmp_path,
                                                                fake_providers,
