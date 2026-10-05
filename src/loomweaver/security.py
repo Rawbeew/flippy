@@ -332,8 +332,20 @@ def sanitized_env():
 
 
 def check_cron_cmd(cmd_list):
-    """Cron jobs may only invoke loomweaver subcommands."""
-    allowed = {"providers", "agent", "eval", "eval-compare", "loadtest", "ttft"}
+    """Cron jobs may only invoke loomweaver subcommands.
+
+    Zero-trust default: `agent`/`armada` are NOT schedulable. They run a
+    tool-calling autonomous process with the production env; a timer-triggered
+    agent whose goal comes from a (possibly-compromised) jobs file would run
+    outside the operator's live oversight. Only read-only or self-contained
+    evaluations may be scheduled. To deliberately allow it, set the env var
+    LOOMWEAVER_CRON_ALLOW_AGENT=1 at the operator level.
+    """
+    if os.environ.get("LOOMWEAVER_CRON_ALLOW_AGENT") == "1":
+        allowed = {"agent", "armada", "providers", "eval", "eval-compare",
+                   "loadtest", "ttft"}
+    else:
+        allowed = {"providers", "eval", "eval-compare", "loadtest", "ttft"}
     if not cmd_list:
         return False, "empty cmd"
     if cmd_list[0] not in allowed:

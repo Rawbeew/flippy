@@ -123,3 +123,27 @@ class TestContextDeterminedTools:
             "Use the shell to list files", "auto")]
         assert "shell" in names and "sql" not in names
 
+# ---------------------------------------------------------------- kill switch
+class TestKillSwitch:
+    def test_kill_off_by_default_tools_run(self):
+        from loomweaver import observability, tools
+        assert observability.kill_switched() is False
+        obs, intr = observability.safe_invoke("list_dir", {"path": "."}, tools.dispatch)
+        assert intr is False  # normal dispatch happens
+
+    def test_kill_on_disables_all_tools(self):
+        from loomweaver import observability, tools
+        with mock.patch.dict("os.environ", {"FLIPPY_KILL_SWITCH": "1"}):
+            assert observability.kill_switched() is True
+            # shell AND read_file both hard-disabled
+            for name, args in [("shell", {"cmd": "ls"}),
+                               ("read_file", {"path": "README.md"})]:
+                obs, intr = observability.safe_invoke(name, args, tools.dispatch)
+                assert intr is True
+                assert "disabled" in str(obs)
+
+    def test_emergency_off_alias(self):
+        from loomweaver import observability
+        with mock.patch.dict("os.environ", {"LOOMWEAVER_EMERGENCY_OFF": "1"}):
+            assert observability.kill_switched() is True
+

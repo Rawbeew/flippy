@@ -279,6 +279,15 @@ assertion-backed by the test suite:
 Run `python -m src.loomweaver doctor` to validate config, and
 `LOOMWEAVER_SAFE_MODE=1` to disable the shell tool entirely.
 
+**Zero-trust operator switches** (read live at dispatch, not import-time):
+- `FLIPPY_KILL_SWITCH=1` (or `LOOMWEAVER_EMERGENCY_OFF=1`) hard-disables ALL
+  agent tool execution immediately — close a compromised run without killing
+  the process.
+- The tool-running agent (`agent`/`armada`) is NOT a schedulable cron
+  subcommand by default — a poisoned `cron_jobs.json` cannot silently fire an
+  autonomous, production-credentialed agent run. Re-enable deliberately via
+  `LOOMWEAVER_CRON_ALLOW_AGENT=1` (not recommended).
+
 ## Not verified / honest limitations
 
 - Zero external users. No production traffic has hit this code.

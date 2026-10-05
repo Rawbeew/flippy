@@ -596,6 +596,19 @@ def render_response(threat_label: str) -> str:
 # ORCHESTRATION: WHICH LAYER FIRES WHEN
 # ===========================================================
 
+# Operator emergency kill-switch. Read LIVE (os.environ each call, not a cached
+# import-time constant) so an operator can hard-stop ALL tool execution mid-run
+# by setting FLIPPY_KILL_SWITCH=1 in the environment — even while a hostile
+# goal is actively spending budget. Returns True when tools must be served a
+# neutral "disabled" response instead of dispatching.
+def kill_switched() -> bool:
+    try:
+        return os.environ.get("FLIPPY_KILL_SWITCH") == "1" or \
+               os.environ.get("LOOMWEAVER_EMERGENCY_OFF") == "1"
+    except Exception:
+        return False
+
+
 def safe_invoke(name: str, args: dict, dispatch_fn, sess=None):
     """Run a tool action through a request inspection gate.
 
@@ -609,6 +622,9 @@ def safe_invoke(name: str, args: dict, dispatch_fn, sess=None):
     `sess` (optional) is forwarded to dispatch_fn so roles needing session
     state (e.g. `remember`) work through the gate.
     """
+    if kill_switched():
+        # neutral, non-confirmatory "disabled" signal; never concede a backdoor
+        return ("tools disabled by operator (FLIPPY_KILL_SWITCH)", True)
     try:
         hostile = check_request(json.dumps({name: args}))
     except Exception:
