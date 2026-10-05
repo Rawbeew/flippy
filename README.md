@@ -1,10 +1,10 @@
 # flippy
 
 A free-tier-first multi-provider LLM router with a complete agent harness.
-Stdlib-only core (no dependencies), 324 tests, zero production traffic.
+Stdlib-only core (no dependencies), 327 tests, zero production traffic.
 
 [![CI](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml/badge.svg)](https://github.com/Rawbeew/flippy/actions/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-324%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-327%20passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -90,7 +90,13 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 python -m src.loomweaver agent "check disk space with the shell tool"
 python -m src.loomweaver agent "fetch example.com and summarize" --session research
 python -m src.loomweaver agent "list the src directory" --model groq/openai/gpt-oss-120b
+python -m src.loomweaver agent "edit the report" --tools shell,write_file   # pre-authorize
 ```
+**Pre-flight intake (`--tools`, Hermes-style):** the operator declares which
+dangerous capabilities are authorized BEFORE the run — the model only ever sees
+that set (no stealth auto-grant of shell/sql/write on a goal keyword). Same on
+armada (`--tools shell` intersects into every role). De-emphasize friction: the
+HTTP API stays a stateless instant drop-in (no questionnaire per request).
 
 A ReAct-style loop: goal → model → tool call → observation → repeat, with:
 
@@ -222,7 +228,7 @@ export OPENROUTER_KEY=sk-or-...
 python src/ai_failover.py "explain KV caches in one paragraph"   # chat with failover
 python -m src.loomweaver agent "check disk space using the shell tool"
 python -m src.loomweaver doctor   # validate your config before your first real call
-pip install pytest && python -m pytest tests/ -q                  # 324 tests
+pip install pytest && python -m pytest tests/ -q                  # 327 tests
 ```
 
 ## Docker
