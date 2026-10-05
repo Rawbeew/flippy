@@ -88,7 +88,7 @@ _WRITE_TOOLS = {"write_file", "json_transform", "http_post_json"}
 class Agent:
     """One named sub-agent with a role, goal, and its own event log."""
 
-    def __init__(self, name, role, goal, context=None, model=None):
+    def __init__(self, name, role, goal, context=None, model=None, tool_scope=None):
         if role not in ROLES:
             raise ValueError(f"unknown role '{role}'. Valid: {list(ROLES)}")
         self.name = name
@@ -96,6 +96,10 @@ class Agent:
         self.goal = goal
         self.context = context or {}
         self.model = model
+        # Hermes-style pre-flight: the operator declares which tools they
+        # authorize for this run. A role may only USE the intersection of its
+        # role toolset and this operator set (cannot be granted a tool it lacks).
+        self.tool_scope = set(tool_scope) if tool_scope else None
         self.result = None
         self.verdict = None
         self.events = []
@@ -109,7 +113,10 @@ class Agent:
         return f"{base}\n{ctx}"
 
     def allowed_tools(self):
-        return ROLES[self.role]["tools"]
+        base = ROLES[self.role]["tools"]
+        if self.tool_scope is not None:
+            return [t for t in base if t in self.tool_scope]
+        return base
 
 
 # ---------------------------------------------------------------- runner
@@ -203,14 +210,16 @@ def run_agent(agent, creds=None, max_steps=12, log=None):
 class Armada:
     """A fleet of agents on one mission."""
 
-    def __init__(self, mission, name=None):
+    def __init__(self, mission, name=None, tool_scope=None):
         self.mission = mission
         self.name = name or "armada-" + str(int(time.time()))
+        self.tool_scope = set(tool_scope) if tool_scope else None
         self.agents = []
         self.log = None
 
     def add(self, name, role, goal, context=None, model=None):
-        self.agents.append(Agent(name, role, goal, context=context, model=model))
+        self.agents.append(Agent(name, role, goal, context=context, model=model,
+                                 tool_scope=self.tool_scope))
         return self  # chainable
 
     def standard_pipeline(self, creds=None):
@@ -227,6 +236,8 @@ class Armada:
                   f"Builder claimed: {{builder_result}}")
         r = Agent("reporter", "reporter",
                   f"Summarize the armada's work on: {self.mission}")
+        for a in (s, b, v, r):
+            a.tool_scope = self.tool_scope
         self.agents = [s, b, v, r]
         return self
 

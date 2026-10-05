@@ -133,6 +133,10 @@ def main(argv=None):
     p.add_argument("--session", default="default")
     p.add_argument("--model")
     p.add_argument("--max-steps", type=int, default=10)
+    p.add_argument("--tools", default="",
+                   help="operator-authorized tool set (comma list, e.g. shell,read_file,http_get). "
+                        "Pre-flight: the model sees ONLY these (plus the safe read floor). "
+                        "Empty = auto-detect from the goal (context determines tools).")
 
     # eval
     p = sub.add_parser("eval", help="run an eval suite")
@@ -154,6 +158,9 @@ def main(argv=None):
     p.add_argument("mission")
     p.add_argument("--pipeline", default="standard", choices=["standard"])
     p.add_argument("--max-steps", type=int, default=12, help="steps per agent")
+    p.add_argument("--tools", default="",
+                   help="operator-pre-authorized tools (comma list); roles only get "
+                        "tools in this set allowed (intersection with their role toolset).")
 
     # providers
     p = sub.add_parser("providers", help="list configured providers/models")
@@ -187,8 +194,10 @@ def main(argv=None):
     elif args.cmd in ("doctor", "check-config"):
         _print_doctor_results(doctor())
     elif args.cmd == "agent":
+        tool_scope = ([t.strip() for t in args.tools.split(",") if t.strip()]
+                      if args.tools else "auto")
         out = agent.run(args.goal, session_id=args.session, model=args.model,
-                        max_steps=args.max_steps)
+                        max_steps=args.max_steps, tool_scope=tool_scope)
         print(json.dumps({"result": out["result"], "run_dir": out["run_dir"]}, indent=2))
     elif args.cmd == "eval":
         if args.suite == "agent":
@@ -216,7 +225,9 @@ def main(argv=None):
         print(json.dumps(get_quota_status(), indent=2))
     elif args.cmd == "armada":
         from .armada import Armada
-        fleet = Armada(args.mission).standard_pipeline()
+        tool_scope = ([t.strip() for t in args.tools.split(",") if t.strip()]
+                      if args.tools else None)
+        fleet = Armada(args.mission, tool_scope=tool_scope).standard_pipeline()
         result = fleet.execute(creds=load_creds(), max_steps_per_agent=args.max_steps)
         print(json.dumps(result, indent=2))
 

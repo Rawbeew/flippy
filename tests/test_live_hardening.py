@@ -283,3 +283,33 @@ class TestRunLogCorruptLine:
         assert len(events) == 1
         assert events[0]["ok"] is True
 
+# ---------------------------------------------------------------- Hermes-style pre-flight intake
+class TestOperatorPreFlightTools:
+    """The operator declares which dangerous tools are authorized BEFORE a run.
+    --tools is the Hermes-style 'input everything before work' for capability:
+    the model/roles only ever see the operator-authorized set."""
+
+    def test_agent_tools_flag_sets_exact_scope(self):
+        from loomweaver import agent
+        # _tools_for_goal with an explicit list = operator declaration, wins over auto
+        assert agent._tools_for_goal("whatever", ["shell"]) == {"shell"}
+        assert agent._tools_for_goal("whatever", ["shell", "read_file"]) == {"shell", "read_file"}
+        assert "sql_query" not in agent._tools_for_goal("whatever", ["shell"])
+
+    def test_auto_default_when_no_tools_flag(self):
+        from loomweaver import agent
+        # empty -> auto -> dangerous tools only on intent keywords
+        assert "shell" not in agent._tools_for_goal("summarize the readme", "auto")
+        assert "shell" in agent._tools_for_goal("use the shell tool", "auto")
+
+    def test_armada_operator_scope_intersects_role_tools(self):
+        from loomweaver.armada import Armada
+        # operator pre-authorizes {shell} -> every role loses read/list but keeps shell
+        fleet = Armada("m", tool_scope=["shell"]).standard_pipeline()
+        for a in fleet.agents:
+            assert set(a.allowed_tools()) <= {"shell"}
+        # no scope -> roles keep their default toolset
+        fleet2 = Armada("m2").standard_pipeline()
+        scout = next(a for a in fleet2.agents if a.role == "scout")
+        assert "read_file" in scout.allowed_tools()
+
