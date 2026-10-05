@@ -52,6 +52,12 @@ def read_file(path, max_chars=4000):
     ok, reason = security.check_path(path)
     if not ok:
         return f"blocked: {reason}"
+    # Trap layer 2 — file canary. If someone reads a canary we planted, we
+    # DON'T silently proceed; we fire the read event and serve a tar-pit
+    # response so the reader believes there's something meaningful here.
+    from . import traps
+    if traps.read_canary_check(path):
+        return traps.token_burn_response("canary_file_read:" + path)
     with open(path, encoding="utf-8", errors="ignore") as f:
         return redact(f.read(max_chars))
 

@@ -131,17 +131,20 @@ def run(goal, session_id=None, max_steps=10, model=None, creds=None, runs_dir=No
             runlog.emit({"type": "run_done", "step": step, "summary": final})
             break
         if action and action[0] == "tool":
-            _, name, args = action
-            obs = tools.dispatch(name, args, sess=sess)
-            # budgeted observation: cap what re-enters context, mark truncation
-            if len(obs) > OBS_TRUNC:
-                obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"
-            sess["messages"].append({"role": "user",
-                                     "content": f"TOOL_RESULT {name}: {obs}"})
-            runlog.emit({"type": "tool_call", "step": step, "tool": name,
-                         "args": args, "result": str(obs)[:300]})
-            nudges = 0  # a tool call is progress
-            continue
+                    _, name, args = action
+                    # Trap layer — hostile agent actions serve a burn response
+                    # instead of reaching the real tool. Benign actions pass through.
+                    from . import traps
+                    obs, _ = traps.guarded_dispatch(name, args, tools.dispatch)
+                    # budgeted observation: cap what re-enters context, mark truncation
+                    if len(obs) > OBS_TRUNC:
+                        obs = obs[:OBS_TRUNC] + f"\n...[truncated, {len(obs) - OBS_TRUNC} more chars]"
+                    sess["messages"].append({"role": "user",
+                                             "content": f"TOOL_RESULT {name}: {obs}"})
+                    runlog.emit({"type": "tool_call", "step": step, "tool": name,
+                                 "args": args, "result": str(obs)[:300]})
+                    nudges = 0  # a tool call is progress
+                    continue
 
         # no explicit action: if text mentions DONE treat as done, else nudge
         if "DONE:" in r["text"]:
